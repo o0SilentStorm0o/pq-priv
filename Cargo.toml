@@ -1,0 +1,8 @@
+[workspace]
+members = ["crates/node","crates/crypto","crates/spec","crates/codec","crates/pow","crates/wallet"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.78"
+license = "Apache-2.0 OR MIT"
