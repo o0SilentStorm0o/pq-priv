@@ -2,7 +2,7 @@
 
 ## Quick Start
 ```bash
-# toolchain
+# toolchain (Rust 1.90+ with edition 2024 support)
 rustup default stable
 rustup component add clippy rustfmt
 
