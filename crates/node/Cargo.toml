@@ -4,3 +4,15 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+clap = { version = "4.5", features = ["derive"] }
+blake3 = "1.5"
+codec = { path = "../codec" }
+consensus = { path = "../consensus" }
+crypto = { path = "../crypto" }
+pow = { path = "../pow" }
+tx = { path = "../tx" }
+utxo = { path = "../utxo" }
+hex = "0.4"
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt"] }

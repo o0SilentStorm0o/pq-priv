@@ -1,0 +1,18 @@
+[package]
+name = "utxo"
+version = "0.1.0"
+edition = "2024"
+description = "UTXO set management for PQ-PRIV"
+authors = ["PQ-PRIV Team"]
+license = "Apache-2.0"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+thiserror = "1"
+codec = { path = "../codec" }
+tx = { path = "../tx" }
+consensus = { path = "../consensus" }
+
+[dev-dependencies]
+crypto = { path = "../crypto" }
+rand = "0.8"
