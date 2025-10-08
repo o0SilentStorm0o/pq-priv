@@ -1,4 +1,15 @@
+CARGO_ORIGIN := $(origin CARGO)
+RUSTUP ?= rustup
+RUST_TOOLCHAIN ?= $(shell $(RUSTUP) show active-toolchain 2>/dev/null | head -n1 | cut -d' ' -f1)
+ifeq ($(strip $(RUST_TOOLCHAIN)),)
+RUST_TOOLCHAIN := $(shell sed -n "s/^channel[[:space:]]*=[[:space:]]*\"\\(.*\\)\"/\\1/p" rust-toolchain.toml 2>/dev/null)
+endif
 CARGO ?= cargo
+ifneq ($(strip $(RUST_TOOLCHAIN)),)
+ifeq ($(CARGO_ORIGIN),undefined)
+CARGO := $(RUSTUP) run $(RUST_TOOLCHAIN) cargo
+endif
+endif
 CARGO_TARGET_DIR ?= target
 DOCKER ?= docker
 
@@ -25,10 +36,10 @@ docker-build:
 	$(DOCKER) build -f docker/Dockerfile -t pqpriv:dev .
 
 testnet-up:
-	bash scripts/testnet-up.sh
+	CARGO="$(CARGO)" bash scripts/testnet-up.sh
 
 testnet-down:
-        bash scripts/testnet-down.sh
+	bash scripts/testnet-down.sh
 
 e2e-up:
 	$(DOCKER) compose -f docker/docker-compose.yml up -d

@@ -152,7 +152,7 @@ pub fn apply_block<B: UtxoBackend>(
     for outpoint in &consumed {
         let removed = store
             .remove(outpoint)?
-            .ok_or_else(|| UtxoError::MissingOutPoint(*outpoint))?;
+            .ok_or(UtxoError::MissingOutPoint(*outpoint))?;
         drop(removed);
     }
 

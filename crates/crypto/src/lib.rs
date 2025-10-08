@@ -238,7 +238,7 @@ pub fn compute_link_tag(spend_public: &PublicKey, nonce: &[u8]) -> [u8; KEY_LEN]
 /// Commitment helper using SHA3-256 over value and randomness.
 pub fn commitment(value: u64, blinding: &[u8]) -> [u8; 32] {
     let mut hasher = Sha3_256::new();
-    hasher.update(&value.to_le_bytes());
+    hasher.update(value.to_le_bytes());
     hasher.update(blinding);
     hasher.finalize().into()
 }

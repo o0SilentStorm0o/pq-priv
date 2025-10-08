@@ -19,8 +19,42 @@ fi
 
 export RUST_LOG="${RUST_LOG:-info}"
 
-cargo build --manifest-path "$ROOT_DIR/Cargo.toml" --release --bin node
-"$ROOT_DIR/target/release/node" run --blocks "$BLOCKS" \
+if [[ -n "${CARGO:-}" ]]; then
+  # shellcheck disable=SC2206
+  CARGO_CMD=(${CARGO})
+elif command -v cargo >/dev/null 2>&1; then
+  CARGO_CMD=(cargo)
+elif command -v powershell.exe >/dev/null 2>&1; then
+  CARGO_PATH_WIN=$(powershell.exe -NoProfile -Command "Get-Command cargo | Select-Object -ExpandProperty Source" | tr -d '\r')
+  if [[ -z "$CARGO_PATH_WIN" ]]; then
+    echo "Error: unable to locate cargo binary via powershell." >&2
+    exit 127
+  fi
+  if command -v wslpath >/dev/null 2>&1; then
+    CARGO_PATH=$(wslpath -u "$CARGO_PATH_WIN")
+  else
+    CARGO_PATH="$CARGO_PATH_WIN"
+  fi
+  CARGO_CMD=("$CARGO_PATH")
+  USE_WINDOWS_PATHS=1
+else
+  echo "Error: cargo command not found. Install Rust or set the CARGO environment variable." >&2
+  exit 127
+fi
+
+MANIFEST_PATH="$ROOT_DIR/Cargo.toml"
+if [[ ${USE_WINDOWS_PATHS:-0} -eq 1 ]]; then
+  MANIFEST_PATH=$(wslpath -w "$MANIFEST_PATH")
+fi
+
+"${CARGO_CMD[@]}" build --manifest-path "$MANIFEST_PATH" --release --bin node
+
+NODE_BIN="$ROOT_DIR/target/release/node"
+if [[ ! -x "$NODE_BIN" && -x "${NODE_BIN}.exe" ]]; then
+  NODE_BIN="${NODE_BIN}.exe"
+fi
+
+"$NODE_BIN" run --blocks "$BLOCKS" \
   >"$LOG_FILE" 2>&1 &
 NODE_PID=$!
 
