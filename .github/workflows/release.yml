@@ -1,0 +1,91 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: linux
+            extension: ''
+          - os: macos-latest
+            artifact: macos
+            extension: ''
+          - os: windows-latest
+            artifact: windows
+            extension: '.exe'
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: 1.90.0
+          components: clippy, rustfmt
+
+      - name: Cache cargo directories
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binaries
+        run: cargo build --release --locked --bins
+
+      - name: Prepare artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          NODE_BIN="target/release/node${{ matrix.extension }}"
+          WALLET_BIN="target/release/wallet${{ matrix.extension }}"
+          if [[ ! -x "$NODE_BIN" ]]; then
+            echo "Expected node binary $NODE_BIN not found or not executable" >&2
+            exit 1
+          fi
+          if [[ ! -x "$WALLET_BIN" ]]; then
+            echo "Expected wallet binary $WALLET_BIN not found or not executable" >&2
+            exit 1
+          fi
+          cp "$NODE_BIN" "dist/pqprivd${{ matrix.extension }}"
+          cp "$WALLET_BIN" "dist/pqpriv-wallet${{ matrix.extension }}"
+          python - <<'PY'
+import hashlib
+import pathlib
+
+dist = pathlib.Path('dist')
+with (dist / 'SHA256SUMS').open('w') as sink:
+    for artifact in sorted(dist.iterdir()):
+        if artifact.name == 'SHA256SUMS':
+            continue
+        digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+        sink.write(f"{digest}  {artifact.name}\n")
+PY
+
+      - name: Import GPG key
+        if: ${{ secrets.GPG_PRIVATE_KEY != '' }}
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --yes --passphrase "$GPG_PASSPHRASE" --pinentry-mode loopback --import
+
+      - name: Sign checksums
+        if: ${{ secrets.GPG_PRIVATE_KEY != '' }}
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          gpg --batch --yes --passphrase "$GPG_PASSPHRASE" --pinentry-mode loopback --armor --detach-sign -o dist/SHA256SUMS.asc dist/SHA256SUMS
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pqpriv-${{ matrix.artifact }}
+          path: dist

@@ -185,6 +185,12 @@ impl TxBuilder {
     }
 }
 
+impl Default for TxBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Errors surfaced by helper APIs.
 #[derive(Debug, Error)]
 pub enum TxError {

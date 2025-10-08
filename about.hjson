@@ -1,0 +1,10 @@
+{
+  output: {
+    html: {
+      title: "PQ-PRIV License Report",
+      header: "Dependency license summary",
+      include-source: true,
+    },
+  },
+  clarify: [],
+}

@@ -1,0 +1,24 @@
+# Build artifacts
+/target
+**/target
+
+# Git metadata
+/.git
+.gitignore
+
+# Local tooling
+*.log
+.DS_Store
+**/.DS_Store
+
+# Release outputs
+/dist
+*.sha256
+
+# Editor/IDE files
+.vscode
+.idea
+*.swp
+
+# Testnet runtime data
+/.testnet

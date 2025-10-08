@@ -1,0 +1,26 @@
+version: "3.9"
+
+services:
+  node_a:
+    image: pqpriv:dev
+    command: ["node", "run", "--p2p-listen", "0.0.0.0:8644", "--rpc-listen", "0.0.0.0:8645", "--blocks", "0"]
+    ports:
+      - "8644:8644"
+      - "8645:8645"
+  node_b:
+    image: pqpriv:dev
+    command: [
+      "node",
+      "run",
+      "--p2p-listen",
+      "0.0.0.0:8744",
+      "--rpc-listen",
+      "0.0.0.0:8745",
+      "--seed",
+      "node_a:8644",
+      "--blocks",
+      "0"
+    ]
+    ports:
+      - "8744:8744"
+      - "8745:8745"

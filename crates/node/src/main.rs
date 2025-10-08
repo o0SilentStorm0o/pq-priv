@@ -110,7 +110,7 @@ fn genesis_block() -> Block {
     let header = BlockHeader {
         version: 1,
         prev_hash: [0u8; 32],
-        merkle_root: compute_merkle_root(&[tx.clone()]),
+        merkle_root: compute_merkle_root(std::slice::from_ref(&tx)),
         utxo_root: [0u8; 32],
         time: current_time(),
         n_bits: 0x207fffff,

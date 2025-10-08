@@ -40,6 +40,13 @@ fn map_ciborium_err(error: ciborium::de::Error<std::io::Error>) -> io::Error {
     }
 }
 
+fn map_ciborium_ser_err(error: ciborium::ser::Error<std::io::Error>) -> io::Error {
+    match error {
+        ciborium::ser::Error::Io(err) => err,
+        other => io::Error::new(io::ErrorKind::InvalidData, other.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -61,12 +68,5 @@ mod tests {
         let encoded = to_vec_cbor(&item).expect("encode");
         let decoded: Dummy = from_slice_cbor(&encoded).expect("decode");
         assert_eq!(decoded, item);
-    }
-}
-
-fn map_ciborium_ser_err(error: ciborium::ser::Error<std::io::Error>) -> io::Error {
-    match error {
-        ciborium::ser::Error::Io(err) => err,
-        other => io::Error::new(io::ErrorKind::InvalidData, other.to_string()),
     }
 }
