@@ -31,6 +31,18 @@ make audit
 * V kritických cestách (kryptografie, konsensus) se vyhýbejte `unwrap()`/`expect()` – raději propagujte chyby.
 * Dodržujte strukturu workspace dle blueprintu a dbejte na `alg_tag` krypto-agilitu.
 
+## Povinné kontrolní kroky (Required checks)
+
+Všechny pull requesty musí v CI projít následujícími kroky. Před odevzdáním PR spusťte ekvivalentní příkazy lokálně:
+
+* `cargo fmt --all -- --check`
+* `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+* `cargo test --workspace --all-targets --locked`
+* `cargo deny check`
+* `cargo audit --deny warnings`
+
+Tyto kontroly jsou nastavené jako „required“ pro merge do chráněných větví.
+
 ## Reprodukovatelné buildy
 
 * Release kompilace spouštějte přes `make build-release`, které nastaví konzistentní `RUSTFLAGS` a profil `release` (`codegen-units=1`, `thin LTO`, `strip` symbolů).

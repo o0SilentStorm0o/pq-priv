@@ -2,7 +2,7 @@ CARGO ?= cargo
 CARGO_TARGET_DIR ?= target
 DOCKER ?= docker
 
-.PHONY: fmt lint test audit build-release docker-build testnet-up testnet-down
+.PHONY: fmt lint test audit build-release docker-build testnet-up testnet-down e2e-up e2e-down
 
 fmt:
 	$(CARGO) fmt --all
@@ -28,4 +28,10 @@ testnet-up:
 	bash scripts/testnet-up.sh
 
 testnet-down:
-	bash scripts/testnet-down.sh
+        bash scripts/testnet-down.sh
+
+e2e-up:
+	$(DOCKER) compose -f docker/docker-compose.yml up -d
+
+e2e-down:
+	$(DOCKER) compose -f docker/docker-compose.yml down --remove-orphans

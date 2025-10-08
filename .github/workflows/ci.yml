@@ -40,7 +40,7 @@ jobs:
 
       - name: Install cargo-deny
         if: matrix.os == 'ubuntu-latest'
-        run: cargo install cargo-deny --locked
+        run: cargo install cargo-deny@0.14.24 --locked
 
       - name: Cargo deny
         if: matrix.os == 'ubuntu-latest'
@@ -48,8 +48,29 @@ jobs:
 
       - name: Install cargo-audit
         if: matrix.os == 'ubuntu-latest'
-        run: cargo install cargo-audit --locked
+        run: cargo install cargo-audit@0.20.0 --locked
+
+      - name: Security tool versions
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cargo deny --version
+          cargo audit --version
 
       - name: Cargo audit
         if: matrix.os == 'ubuntu-latest'
         run: cargo audit --deny warnings
+
+      - name: Install cargo-about
+        run: cargo install cargo-about@0.6.4 --locked
+
+      - name: Generate license report
+        shell: bash
+        run: |
+          mkdir -p dist
+          cargo about generate about.hjson > dist/LICENSES.html
+
+      - name: Upload license report
+        uses: actions/upload-artifact@v4
+        with:
+          name: licenses-${{ matrix.os }}
+          path: dist/LICENSES.html

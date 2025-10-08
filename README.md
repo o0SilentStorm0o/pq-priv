@@ -46,6 +46,11 @@ make audit
 * Linty a testy běží automaticky v GitHub Actions (`.github/workflows/ci.yml`).
 * Pro rychlý lokální testnet spusťte `make testnet-up` (ukončení `make testnet-down`).
 
+```bash
+BLOCKS=256 make testnet-up
+tail -f .testnet/node.log
+```
+
 ## Docker image
 
 ```bash

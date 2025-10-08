@@ -69,6 +69,21 @@ with (dist / 'SHA256SUMS').open('w') as sink:
         sink.write(f"{digest}  {artifact.name}\n")
 PY
 
+      - name: Import GPG key
+        if: ${{ secrets.GPG_PRIVATE_KEY != '' }}
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --yes --passphrase "$GPG_PASSPHRASE" --pinentry-mode loopback --import
+
+      - name: Sign checksums
+        if: ${{ secrets.GPG_PRIVATE_KEY != '' }}
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          gpg --batch --yes --passphrase "$GPG_PASSPHRASE" --pinentry-mode loopback --armor --detach-sign -o dist/SHA256SUMS.asc dist/SHA256SUMS
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
