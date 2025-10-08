@@ -46,6 +46,14 @@ jobs:
           mkdir -p dist
           NODE_BIN="target/release/node${{ matrix.extension }}"
           WALLET_BIN="target/release/wallet${{ matrix.extension }}"
+          if [[ ! -x "$NODE_BIN" ]]; then
+            echo "Expected node binary $NODE_BIN not found or not executable" >&2
+            exit 1
+          fi
+          if [[ ! -x "$WALLET_BIN" ]]; then
+            echo "Expected wallet binary $WALLET_BIN not found or not executable" >&2
+            exit 1
+          fi
           cp "$NODE_BIN" "dist/pqprivd${{ matrix.extension }}"
           cp "$WALLET_BIN" "dist/pqpriv-wallet${{ matrix.extension }}"
           python - <<'PY'

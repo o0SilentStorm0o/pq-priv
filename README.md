@@ -55,7 +55,7 @@ docker run --rm pqpriv:dev --help
 
 ## Dokumentace
 
-* Implementační blueprint (v0.9) – strategický plán MVP.
+* [Implementační blueprint (v0.9)](./spec/blueprint.md) – strategický plán MVP.
 * [`spec/build.md`](./spec/build.md) – build & release handbook.
 * [`spec/README.md`](./spec/README.md) – struktura specifikací.
 
