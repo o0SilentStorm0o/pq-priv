@@ -48,7 +48,9 @@ jobs:
 
       - name: Install cargo-audit
         if: matrix.os == 'ubuntu-latest'
-        run: cargo install cargo-audit@0.20.0 --locked
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit@0.20.0
 
       - name: Security tool versions
         if: matrix.os == 'ubuntu-latest'
