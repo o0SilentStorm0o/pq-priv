@@ -1,0 +1,7 @@
+* text=auto eol=lf
+
+# Treat generated artifacts as binary
+*.lock text eol=lf
+*.png binary
+*.jpg binary
+*.svg binary
