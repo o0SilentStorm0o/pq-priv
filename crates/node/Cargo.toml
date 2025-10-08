@@ -2,16 +2,17 @@
 name = "node"
 version = "0.1.0"
 edition = "2024"
+license.workspace = true
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 blake3 = "1.5"
-codec = { path = "../codec" }
-consensus = { path = "../consensus" }
-crypto = { path = "../crypto" }
-pow = { path = "../pow" }
-tx = { path = "../tx" }
-utxo = { path = "../utxo" }
+codec = { path = "../codec", version = "0.1.0" }
+consensus = { path = "../consensus", version = "0.1.0" }
+crypto = { path = "../crypto", version = "0.1.0" }
+pow = { path = "../pow", version = "0.1.0" }
+tx = { path = "../tx", version = "0.1.0" }
+utxo = { path = "../utxo", version = "0.1.0" }
 hex = "0.4"
 thiserror = "1.0"
 tracing = "0.1"

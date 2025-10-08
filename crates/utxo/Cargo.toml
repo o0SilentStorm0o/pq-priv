@@ -2,17 +2,17 @@
 name = "utxo"
 version = "0.1.0"
 edition = "2024"
+license.workspace = true
 description = "UTXO set management for PQ-PRIV"
 authors = ["PQ-PRIV Team"]
-license = "Apache-2.0"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 thiserror = "1"
-codec = { path = "../codec" }
-tx = { path = "../tx" }
-consensus = { path = "../consensus" }
+codec = { path = "../codec", version = "0.1.0" }
+tx = { path = "../tx", version = "0.1.0" }
+consensus = { path = "../consensus", version = "0.1.0" }
 
 [dev-dependencies]
-crypto = { path = "../crypto" }
+crypto = { path = "../crypto", version = "0.1.0" }
 rand = "0.8"
