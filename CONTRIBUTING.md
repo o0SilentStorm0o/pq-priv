@@ -15,8 +15,8 @@ Děkujeme, že chcete pomoci s implementací post-kvantové soukromé sítě PQ-
 ## Lokální vývoj
 
 ```bash
-# instalace komponent
-rustup toolchain install 1.90.0
+# toolchain (Rust 1.90+ with edition 2024 support)
+rustup default stable
 rustup component add clippy rustfmt
 
 # kompletní sada kontrol

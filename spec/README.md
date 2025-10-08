@@ -9,6 +9,3 @@ This directory will host human-readable specifications that accompany the PQ-PRI
 * Keep each document versioned and include open questions plus acceptance criteria so downstream teams can plan audits.
 
 > **Note:** Until the individual specs are filled in, treat this directory as the staging area for protocol documentation contributions.
-
-
-See [build.md](./build.md) for reproducible build guidance.
