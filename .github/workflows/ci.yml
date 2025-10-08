@@ -50,7 +50,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-audit@0.20.0
+          tool: cargo-audit@0.21.0
 
       - name: Security tool versions
         if: matrix.os == 'ubuntu-latest'
