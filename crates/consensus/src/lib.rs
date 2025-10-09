@@ -234,7 +234,7 @@ pub fn next_difficulty(
         lwma = min_lwma;
     }
     let mut next = average_target * BigUint::from(lwma);
-    next /= BigUint::from(params.target_spacing as u64);
+    next /= BigUint::from(params.target_spacing);
     let pow_limit = BigUint::from_bytes_be(&params.pow_limit);
     if next > pow_limit {
         next = pow_limit;
@@ -250,7 +250,7 @@ pub fn merkle_root(txs: &[Tx]) -> [u8; 32] {
     }
     let mut layer: Vec<[u8; 32]> = txs.iter().map(|tx| *tx.txid().as_bytes()).collect();
     while layer.len() > 1 {
-        let mut next = Vec::with_capacity((layer.len() + 1) / 2);
+        let mut next = Vec::with_capacity(layer.len().div_ceil(2));
         for chunk in layer.chunks(2) {
             let left = chunk[0];
             let right = chunk.get(1).copied().unwrap_or(left);
@@ -273,10 +273,8 @@ pub fn validate_block(
     if block.txs.is_empty() {
         return Err(ConsensusError::EmptyBlock);
     }
-    if let Some(parent) = prev {
-        if block.header.prev_hash != pow_hash(parent) {
-            return Err(ConsensusError::InvalidParent);
-        }
+    if let Some(parent) = prev && block.header.prev_hash != pow_hash(parent) {
+        return Err(ConsensusError::InvalidParent);
     }
     validate_pow(&block.header, &params.pow_limit)?;
     let expected_root = merkle_root(&block.txs);
