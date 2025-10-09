@@ -273,7 +273,10 @@ pub fn validate_block(
     if block.txs.is_empty() {
         return Err(ConsensusError::EmptyBlock);
     }
-    if let Some(parent) = prev && block.header.prev_hash != pow_hash(parent) {
+    if prev
+        .map(|parent| block.header.prev_hash != pow_hash(parent))
+        .unwrap_or(false)
+    {
         return Err(ConsensusError::InvalidParent);
     }
     validate_pow(&block.header, &params.pow_limit)?;
