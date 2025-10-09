@@ -1,5 +1,6 @@
 use std::fmt;
 
+use consensus::BlockHeader;
 use rand::{RngCore, rngs::OsRng};
 use serde::{Deserialize, Serialize};
 
@@ -63,6 +64,8 @@ pub struct Version {
     pub nonce: u64,
     pub user_agent: String,
     pub best_height: u64,
+    #[serde(with = "serde_bytes")]
+    pub auth_tag: [u8; 32],
 }
 
 impl Version {
@@ -77,6 +80,7 @@ impl Version {
             nonce: OsRng.next_u64(),
             user_agent: agent.into(),
             best_height,
+            auth_tag: [0u8; 32],
         }
     }
 }
@@ -128,6 +132,12 @@ pub enum InvType {
 pub enum NetMessage {
     Version(Version),
     VerAck,
+    GetHeaders {
+        locator: Vec<[u8; 32]>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        stop_hash: Option<[u8; 32]>,
+    },
+    Headers(Vec<BlockHeader>),
     Ping(u64),
     Pong(u64),
     GetAddr,
@@ -136,5 +146,8 @@ pub enum NetMessage {
     GetData(Inventory),
     Tx(#[serde(with = "serde_bytes")] Vec<u8>),
     Block(#[serde(with = "serde_bytes")] Vec<u8>),
-    Reject { code: u16, reason: String },
+    Reject {
+        code: u16,
+        reason: String,
+    },
 }

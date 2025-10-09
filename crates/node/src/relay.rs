@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::sync::Arc;
 
 use codec::from_slice_cbor;
@@ -78,6 +80,21 @@ impl Relay {
                     }
                 }
             }
+        }
+    }
+
+    pub fn handle_get_headers(
+        &self,
+        peer_id: PeerId,
+        locator: Vec<[u8; 32]>,
+        stop: Option<[u8; 32]>,
+    ) {
+        let headers = {
+            let chain = self.chain.lock();
+            chain.headers_for_locator(&locator, stop.as_ref(), 2000)
+        };
+        if !headers.is_empty() {
+            let _ = self.network.send(peer_id, NetMessage::Headers(headers));
         }
     }
 

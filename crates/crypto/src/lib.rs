@@ -2,16 +2,15 @@
 //!
 //! The current implementation focuses on providing a consistent API and
 //! deterministic key-derivation pipeline that follows the blueprint
-//! described in the project specification.  The actual signature
-//! algorithm is a placeholder that relies on BLAKE3 based constructions so
-//! that the higher layers can be developed in parallel.  Swapping in a
-//! production-grade post-quantum scheme (Dilithium by default, SPHINCS+
-//! as a fallback) will only require replacing the code inside this crate
-//! while keeping the interfaces intact.
+//! described in the project specification.  The current signing routine
+//! relies on Ed25519 as a stand-in until Dilithium/SPHINCS+ bindings are
+//! wired in; the API is designed so that swapping implementations only
+//! requires touching this module.
 
 use std::convert::TryInto;
 
 use blake3::derive_key;
+use ed25519_dalek::{Signature as DalekSignature, Signer, SigningKey, Verifier, VerifyingKey};
 use rand::RngCore;
 use rand::rngs::OsRng;
 use rand_chacha::ChaCha20Rng;
@@ -50,6 +49,8 @@ pub enum CryptoError {
     InvalidSignature,
     #[error("unsupported signature algorithm: 0x{0:02x}")]
     UnsupportedAlg(u8),
+    #[error("malformed key material")]
+    InvalidKey,
 }
 
 /// Deterministic key material used for both scan and spend keys.
@@ -186,11 +187,17 @@ impl SpendKeypair {
 }
 
 fn keypair_from_seed(seed: [u8; KEY_LEN]) -> (PublicKey, SecretKey) {
+    // Expand the deterministic seed into a signing key using ChaCha20 to
+    // avoid trivial low-entropy keys.
     let mut rng = ChaCha20Rng::from_seed(seed);
-    let mut sk = vec![0u8; KEY_LEN];
-    rng.fill_bytes(&mut sk);
-    let pk = blake3::hash(&sk).as_bytes().to_vec();
-    (PublicKey::from_bytes(pk), SecretKey::from_bytes(sk))
+    let mut sk_bytes = [0u8; KEY_LEN];
+    rng.fill_bytes(&mut sk_bytes);
+    let signing = SigningKey::from_bytes(&sk_bytes);
+    let verifying = signing.verifying_key();
+    (
+        PublicKey::from_bytes(verifying.to_bytes().to_vec()),
+        SecretKey::from_bytes(signing.to_bytes().to_vec()),
+    )
 }
 
 /// Minimal view token shared with auditors.
@@ -199,31 +206,40 @@ pub struct ViewToken {
     pub tag: [u8; KEY_LEN],
 }
 
-/// Simple BLAKE3-based placeholder signature scheme.
+/// Ed25519-based placeholder signature scheme.
 pub fn sign(message: &[u8], secret: &SecretKey, alg: AlgTag) -> Signature {
-    let mut hasher = blake3::Hasher::new();
-    let derived_public = blake3::hash(secret.as_bytes());
-    hasher.update(derived_public.as_bytes());
-    hasher.update(message);
-    let sig = hasher.finalize();
-    Signature::new(alg, sig.as_bytes().to_vec())
+    let sk_bytes: [u8; KEY_LEN] = secret
+        .as_bytes()
+        .try_into()
+        .expect("secret key must be 32 bytes");
+    let signing = SigningKey::from_bytes(&sk_bytes);
+    let sig = signing.sign(message);
+    Signature::new(alg, sig.to_bytes().to_vec())
 }
 
-/// Verify a placeholder signature.
+/// Verify a signature.
 pub fn verify(
     message: &[u8],
     public: &PublicKey,
     signature: &Signature,
 ) -> Result<(), CryptoError> {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(public.as_bytes());
-    hasher.update(message);
-    let expected = hasher.finalize();
-    if expected.as_bytes() == signature.bytes.as_slice() {
-        Ok(())
-    } else {
-        Err(CryptoError::InvalidSignature)
+    if signature.alg != AlgTag::Dilithium {
+        return Err(CryptoError::UnsupportedAlg(signature.alg as u8));
     }
+    let vk_bytes: [u8; 32] = public
+        .as_bytes()
+        .try_into()
+        .map_err(|_| CryptoError::InvalidKey)?;
+    let verifying = VerifyingKey::from_bytes(&vk_bytes).map_err(|_| CryptoError::InvalidKey)?;
+    let sig_bytes: [u8; 64] = signature
+        .bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| CryptoError::InvalidSignature)?;
+    let sig = DalekSignature::from_bytes(&sig_bytes);
+    verifying
+        .verify(message, &sig)
+        .map_err(|_| CryptoError::InvalidSignature)
 }
 
 /// Compute the linkability tag for a spend witness.
@@ -283,5 +299,25 @@ mod tests {
         let message = b"hello world";
         let sig = sign(message, &spend.secret, AlgTag::Dilithium);
         verify(message, &spend.public, &sig).expect("valid signature");
+    }
+
+    #[test]
+    fn verify_rejects_signature_algorithm_mismatch() {
+        let km = KeyMaterial::random();
+        let spend = km.derive_spend_keypair(0);
+        let message = b"algo mismatch";
+        let sig = sign(message, &spend.secret, AlgTag::Dilithium);
+        let mismatched = Signature::new(AlgTag::SphincsPlus, sig.bytes.clone());
+        assert!(verify(message, &spend.public, &mismatched).is_err());
+    }
+
+    #[test]
+    fn verify_rejects_forged_signature() {
+        let km = KeyMaterial::random();
+        let spend = km.derive_spend_keypair(0);
+        let attacker = KeyMaterial::random().derive_spend_keypair(0);
+        let message = b"forgery attempt";
+        let forged = sign(message, &attacker.secret, AlgTag::Dilithium);
+        assert!(verify(message, &spend.public, &forged).is_err());
     }
 }

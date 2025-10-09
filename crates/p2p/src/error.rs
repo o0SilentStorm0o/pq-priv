@@ -34,7 +34,7 @@ impl From<NetworkError> for io::Error {
     fn from(err: NetworkError) -> Self {
         match err {
             NetworkError::Io(e) => e,
-            other => io::Error::new(io::ErrorKind::Other, other),
+            other => io::Error::other(other),
         }
     }
 }

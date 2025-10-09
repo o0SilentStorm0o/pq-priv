@@ -25,10 +25,15 @@ pub async fn spawn_peer(
     local_version: Version,
     remote_addr: SocketAddr,
 ) -> Result<(), NetworkError> {
-    let remote_version =
-        perform_handshake(&mut stream, role, &local_version, config.max_message_size)
-            .await
-            .map_err(NetworkError::from)?;
+    let remote_version = perform_handshake(
+        &mut stream,
+        role,
+        &local_version,
+        config.max_message_size,
+        &config.handshake_key,
+    )
+    .await
+    .map_err(NetworkError::from)?;
 
     let (reader, writer) = stream.into_split();
     let (tx, rx) = mpsc::channel(config.outbound_queue);

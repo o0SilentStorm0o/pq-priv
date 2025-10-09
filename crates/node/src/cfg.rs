@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::net::SocketAddr;
 
 /// High level runtime configuration for the reference node.
