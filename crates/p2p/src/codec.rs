@@ -75,6 +75,7 @@ fn write_varint(value: u32, buf: &mut Vec<u8>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use consensus::BlockHeader;
     use tokio::io::duplex;
 
     #[tokio::test]
@@ -83,6 +84,27 @@ mod tests {
         let msg = NetMessage::Ping(42);
         write_message(&mut client, &msg).await.expect("write");
         let decoded = read_message(&mut server, 1024).await.expect("read");
+        assert_eq!(decoded, msg);
+    }
+
+    #[tokio::test]
+    async fn round_trips_headers_message() {
+        let (mut client, mut server) = duplex(256);
+        let header = BlockHeader {
+            version: 1,
+            prev_hash: [1u8; 32],
+            merkle_root: [2u8; 32],
+            utxo_root: [3u8; 32],
+            time: 12345,
+            n_bits: 0x207fffff,
+            nonce: 99,
+            alg_tag: 1,
+        };
+        let msg = NetMessage::Headers(vec![header.clone()]);
+        write_message(&mut client, &msg)
+            .await
+            .expect("write headers");
+        let decoded = read_message(&mut server, 1024).await.expect("read headers");
         assert_eq!(decoded, msg);
     }
 }

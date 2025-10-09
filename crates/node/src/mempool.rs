@@ -277,11 +277,15 @@ impl TxPoolInner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crypto::{AlgTag, Signature};
+    use crypto::{AlgTag, PublicKey, Signature};
     use tx::{Input, Output, OutputMeta, Witness};
 
     fn sample_signature() -> Signature {
         Signature::new(AlgTag::Dilithium, vec![0u8; 64])
+    }
+
+    fn sample_public_key() -> PublicKey {
+        PublicKey::from_bytes(vec![2u8; 32])
     }
 
     fn sample_output() -> Output {
@@ -289,7 +293,14 @@ mod tests {
     }
 
     fn sample_tx(link_tag: [u8; 32]) -> Tx {
-        let input = Input::new([1u8; 32], 0, link_tag, Vec::new(), sample_signature());
+        let input = Input::new(
+            [1u8; 32],
+            0,
+            link_tag,
+            sample_public_key(),
+            vec![0x42],
+            sample_signature(),
+        );
         Tx::new(vec![input], vec![sample_output()], Witness::default())
     }
 

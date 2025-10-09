@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashSet};
 use consensus::Block;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tx::{Output, Tx};
+use tx::{self, Output, Tx};
 
 /// Unique reference to a transaction output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -51,6 +51,10 @@ pub enum UtxoError {
     DuplicateOutPoint,
     #[error("linkability tag already seen: {0:?}")]
     DuplicateLinkTag([u8; 32]),
+    #[error("one-of-many proof missing or malformed")]
+    InvalidProof,
+    #[error("signature failed to verify")]
+    InvalidSignature,
 }
 
 /// Backend interface used by the ledger applicator.
@@ -128,6 +132,7 @@ pub fn apply_block<B: UtxoBackend>(
     let mut produced: Vec<(OutPoint, OutputRecord)> = Vec::new();
 
     for (tx_index, tx) in block.txs.iter().enumerate() {
+        let binding = tx::binding_hash(&tx.outputs, &tx.witness);
         if tx_index == 0 {
             if !tx.inputs.is_empty() {
                 return Err(UtxoError::InvalidCoinbase);
@@ -136,6 +141,7 @@ pub fn apply_block<B: UtxoBackend>(
             consume_inputs(
                 store,
                 tx,
+                &binding,
                 &mut consumed,
                 &mut seen_outpoints,
                 &mut block_tags,
@@ -166,12 +172,16 @@ pub fn apply_block<B: UtxoBackend>(
 fn consume_inputs<B: UtxoBackend>(
     store: &mut B,
     tx: &Tx,
+    binding_hash: &[u8; 32],
     consumed: &mut Vec<OutPoint>,
     seen_outpoints: &mut HashSet<OutPoint>,
     block_tags: &mut HashSet<[u8; 32]>,
     new_tags: &mut Vec<[u8; 32]>,
 ) -> Result<(), UtxoError> {
     for input in &tx.inputs {
+        if input.one_of_many_proof.is_empty() {
+            return Err(UtxoError::InvalidProof);
+        }
         let outpoint = OutPoint::new(input.prev_txid, input.prev_index);
         if !seen_outpoints.insert(outpoint) {
             return Err(UtxoError::DuplicateOutPoint);
@@ -186,6 +196,9 @@ fn consume_inputs<B: UtxoBackend>(
         if store.get(&outpoint)?.is_none() {
             return Err(UtxoError::MissingOutPoint(outpoint));
         }
+        let message = tx::input_auth_message(input, binding_hash);
+        crypto::verify(&message, &input.spend_public, &input.pq_signature)
+            .map_err(|_| UtxoError::InvalidSignature)?;
         consumed.push(outpoint);
         new_tags.push(input.ann_link_tag);
     }
@@ -212,9 +225,8 @@ fn collect_outputs<B: UtxoBackend>(
 mod tests {
     use super::*;
     use consensus::{Block, BlockHeader};
-    use crypto::{AlgTag, KeyMaterial, Signature};
-    use rand::Rng;
-    use tx::{Input, OutputMeta, TxBuilder, Witness};
+    use crypto::KeyMaterial;
+    use tx::{self, OutputMeta, TxBuilder, Witness, binding_hash, build_signed_input};
 
     fn dummy_block_header(prev: [u8; 32]) -> BlockHeader {
         BlockHeader {
@@ -270,20 +282,17 @@ mod tests {
     #[test]
     fn duplicate_outpoint_within_block_is_rejected() {
         let mut store = MemoryUtxoStore::new();
-        let cb = coinbase(25);
-        let block = assemble_block(vec![cb.clone()]);
-        apply_block(&mut store, &block, 1).expect("apply genesis");
+        let spend = KeyMaterial::random().derive_spend_keypair(0);
+        let txid = [11u8; 32];
+        let outpoint = OutPoint::new(txid, 0);
+        let output = tx::Output::new(vec![1], [2u8; 32], OutputMeta::default());
+        let compact = store.allocate_compact_index().unwrap();
+        store
+            .insert(outpoint, OutputRecord::new(output, 0, compact))
+            .unwrap();
 
-        let outpoint = OutPoint::new(*cb.txid().as_bytes(), 0);
-        let mut input_tag = [0u8; 32];
-        rand::thread_rng().fill(&mut input_tag);
-        let input = Input::new(
-            outpoint.txid,
-            outpoint.index,
-            input_tag,
-            Vec::new(),
-            Signature::new(AlgTag::Dilithium, vec![0; 32]),
-        );
+        let binding = binding_hash(&[], &Witness::default());
+        let input = build_signed_input(txid, 0, &spend, vec![1], &binding);
         let tx = TxBuilder::new()
             .add_input(input.clone())
             .add_input(input)
@@ -296,19 +305,18 @@ mod tests {
     #[test]
     fn double_spend_via_link_tag_is_rejected() {
         let mut store = MemoryUtxoStore::new();
-        let cb = coinbase(30);
-        apply_block(&mut store, &assemble_block(vec![cb.clone()]), 1).unwrap();
+        let spend = KeyMaterial::random().derive_spend_keypair(0);
+        let txid = [22u8; 32];
+        let outpoint = OutPoint::new(txid, 0);
+        let output = tx::Output::new(vec![2], [3u8; 32], OutputMeta::default());
+        let compact = store.allocate_compact_index().unwrap();
+        store
+            .insert(outpoint, OutputRecord::new(output, 0, compact))
+            .unwrap();
 
-        let outpoint = OutPoint::new(*cb.txid().as_bytes(), 0);
-        let tag = [1u8; 32];
-        let input = Input::new(
-            outpoint.txid,
-            outpoint.index,
-            tag,
-            Vec::new(),
-            Signature::new(AlgTag::Dilithium, vec![0; 32]),
-        );
-        let spend = TxBuilder::new().add_input(input).build();
+        let binding = binding_hash(&[], &Witness::default());
+        let spend_input = build_signed_input(txid, 0, &spend, vec![2], &binding);
+        let spend = TxBuilder::new().add_input(spend_input.clone()).build();
         apply_block(
             &mut store,
             &assemble_block(vec![coinbase(1), spend.clone()]),
@@ -318,19 +326,15 @@ mod tests {
 
         let err =
             apply_block(&mut store, &assemble_block(vec![coinbase(1), spend]), 3).unwrap_err();
-        assert_eq!(err, UtxoError::DuplicateLinkTag(tag));
+        assert_eq!(err, UtxoError::DuplicateLinkTag(spend_input.ann_link_tag));
     }
 
     #[test]
     fn missing_outpoint_is_detected() {
         let mut store = MemoryUtxoStore::new();
-        let bogus = Input::new(
-            [9u8; 32],
-            0,
-            [0u8; 32],
-            Vec::new(),
-            Signature::new(AlgTag::Dilithium, vec![0; 32]),
-        );
+        let spend = KeyMaterial::random().derive_spend_keypair(0);
+        let binding = binding_hash(&[], &Witness::default());
+        let bogus = build_signed_input([9u8; 32], 0, &spend, vec![3], &binding);
         let spend = TxBuilder::new().add_input(bogus).build();
         let block = assemble_block(vec![coinbase(1), spend]);
         let err = apply_block(&mut store, &block, 1).unwrap_err();

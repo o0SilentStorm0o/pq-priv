@@ -15,3 +15,5 @@ tracing = "0.1"
 rand = "0.8"
 parking_lot = "0.12"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+consensus = { path = "../consensus", version = "0.1.0" }
+blake3 = "1.5"

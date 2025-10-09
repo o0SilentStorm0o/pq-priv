@@ -1,12 +1,20 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod cfg;
+mod mempool;
+mod relay;
+mod rpc;
+mod state;
+mod sync;
+
 use clap::{Parser, Subcommand};
-use consensus::{Block, BlockHeader, ChainParams, pow_hash};
+use consensus::{Block, BlockHeader, ChainParams, merkle_root, pow_hash};
 use crypto::{self, KeyMaterial};
 use pow::mine_block;
 use tracing::info;
 use tx::{Output, OutputMeta, Tx, TxBuilder, Witness, build_stealth_blob};
-use utxo::{MemoryUtxoStore, apply_block};
+
+use crate::state::ChainState;
 
 #[derive(Parser)]
 #[command(author, version, about = "PQ-PRIV reference node prototype")]
@@ -42,39 +50,44 @@ fn main() {
 }
 
 fn run_node(blocks: u32) {
-    let _params = ChainParams::default();
-    let genesis = genesis_block();
+    let params = ChainParams::default();
+    let genesis = genesis_block(&params);
     info!(hash = ?pow_hash(&genesis.header), "Loaded genesis block");
-    let mut chain = vec![genesis.clone()];
-    let mut utxo = MemoryUtxoStore::new();
-    apply_block(&mut utxo, &genesis, 0).expect("apply genesis");
+    let mut chain_state =
+        ChainState::bootstrap(params.clone(), genesis.clone()).expect("bootstrap chain");
     for height in 1..=blocks {
-        let prev = chain.last().unwrap();
-        let mut header = block_template(prev);
+        let prev = chain_state.tip().clone();
+        let n_bits = chain_state
+            .next_difficulty_bits()
+            .unwrap_or(prev.header.n_bits);
+        let mut header = block_template(&prev, n_bits);
         let txs = vec![coinbase_tx(height as u64)];
-        header.merkle_root = compute_merkle_root(&txs);
-        let block = mine_block(header, txs);
-        apply_block(&mut utxo, &block, height as u64).expect("apply block");
+        header.merkle_root = merkle_root(&txs);
+        let block = mine_block(header, txs, &params.pow_limit);
+        chain_state.apply_block(block.clone()).expect("apply block");
         info!(
             height,
             hash = ?pow_hash(&block.header),
             nonce = block.header.nonce,
-            utxos = utxo.utxo_count(),
+            utxos = chain_state.utxo_count(),
             "Mined block"
         );
-        chain.push(block);
     }
 }
 
-fn block_template(prev: &Block) -> BlockHeader {
+fn block_template(prev: &Block, n_bits: u32) -> BlockHeader {
     let prev_hash = pow_hash(&prev.header);
+    let mut time = current_time();
+    if time <= prev.header.time {
+        time = prev.header.time + 1;
+    }
     BlockHeader {
         version: 1,
         prev_hash,
         merkle_root: [0u8; 32],
         utxo_root: [0u8; 32],
-        time: current_time(),
-        n_bits: 0x207fffff,
+        time,
+        n_bits,
         nonce: 0,
         alg_tag: 1,
     }
@@ -97,30 +110,19 @@ fn coinbase_tx(height: u64) -> Tx {
         .build()
 }
 
-fn compute_merkle_root(txs: &[Tx]) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new();
-    for tx in txs {
-        hasher.update(tx.txid().as_bytes());
-    }
-    hasher.finalize().into()
-}
-
-fn genesis_block() -> Block {
+fn genesis_block(params: &ChainParams) -> Block {
     let tx = coinbase_tx(0);
     let header = BlockHeader {
         version: 1,
         prev_hash: [0u8; 32],
-        merkle_root: compute_merkle_root(std::slice::from_ref(&tx)),
+        merkle_root: merkle_root(std::slice::from_ref(&tx)),
         utxo_root: [0u8; 32],
         time: current_time(),
         n_bits: 0x207fffff,
         nonce: 0,
         alg_tag: 1,
     };
-    Block {
-        header,
-        txs: vec![tx],
-    }
+    mine_block(header, vec![tx], &params.pow_limit)
 }
 
 fn current_time() -> u64 {

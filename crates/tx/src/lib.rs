@@ -59,6 +59,7 @@ pub struct Input {
     pub prev_txid: [u8; 32],
     pub prev_index: u32,
     pub ann_link_tag: [u8; 32],
+    pub spend_public: PublicKey,
     #[serde(with = "serde_bytes")]
     pub one_of_many_proof: Vec<u8>,
     pub pq_signature: Signature,
@@ -69,6 +70,7 @@ impl Input {
         prev_txid: [u8; 32],
         prev_index: u32,
         ann_link_tag: [u8; 32],
+        spend_public: PublicKey,
         proof: Vec<u8>,
         signature: Signature,
     ) -> Self {
@@ -76,6 +78,7 @@ impl Input {
             prev_txid,
             prev_index,
             ann_link_tag,
+            spend_public,
             one_of_many_proof: proof,
             pq_signature: signature,
         }
@@ -115,9 +118,20 @@ impl Tx {
 
     /// Compute the transaction identifier (without witness data).
     pub fn txid(&self) -> TxId {
+        let inputs: Vec<InputEssenceRef<'_>> = self
+            .inputs
+            .iter()
+            .map(|input| InputEssenceRef {
+                prev_txid: &input.prev_txid,
+                prev_index: input.prev_index,
+                ann_link_tag: &input.ann_link_tag,
+                spend_public: input.spend_public.as_bytes(),
+                one_of_many_proof: &input.one_of_many_proof,
+            })
+            .collect();
         let essence = TxEssenceRef {
             version: self.version,
-            inputs: &self.inputs,
+            inputs,
             outputs: &self.outputs,
             locktime: self.locktime,
         };
@@ -138,9 +152,20 @@ impl Tx {
 #[derive(Serialize)]
 struct TxEssenceRef<'a> {
     version: u16,
-    inputs: &'a [Input],
+    inputs: Vec<InputEssenceRef<'a>>,
     outputs: &'a [Output],
     locktime: u32,
+}
+
+#[derive(Serialize)]
+struct InputEssenceRef<'a> {
+    prev_txid: &'a [u8; 32],
+    prev_index: u32,
+    ann_link_tag: &'a [u8; 32],
+    #[serde(with = "serde_bytes")]
+    spend_public: &'a [u8],
+    #[serde(with = "serde_bytes")]
+    one_of_many_proof: &'a [u8],
 }
 
 /// Convenience builder used in tests and wallet prototypes.
@@ -198,18 +223,90 @@ pub enum TxError {
     InvalidSignature,
 }
 
-/// Assemble a basic input by signing the provided message with the spend key.
+/// Compute the binding hash over outputs and witness data.
+pub fn binding_hash(outputs: &[Output], witness: &Witness) -> [u8; 32] {
+    let mut hasher = Hasher::new();
+    hasher.update(&(outputs.len() as u64).to_le_bytes());
+    for output in outputs {
+        hasher.update(&(output.stealth_blob.len() as u64).to_le_bytes());
+        hasher.update(&output.stealth_blob);
+        hasher.update(&output.value_commitment);
+        hasher.update(&[output.output_meta.deposit_flag as u8]);
+        match &output.output_meta.deposit_id {
+            Some(id) => {
+                hasher.update(&[1]);
+                hasher.update(id);
+            }
+            None => {
+                hasher.update(&[0]);
+            }
+        }
+    }
+    hasher.update(&witness.stamp.to_le_bytes());
+    hasher.update(&(witness.range_proofs.len() as u64).to_le_bytes());
+    hasher.update(&witness.range_proofs);
+    hasher.update(&(witness.extra.len() as u64).to_le_bytes());
+    hasher.update(&witness.extra);
+    hasher.finalize().into()
+}
+
+fn auth_message_raw(
+    prev_txid: &[u8; 32],
+    prev_index: u32,
+    ann_link_tag: &[u8; 32],
+    spend_public: &PublicKey,
+    ring_proof: &[u8],
+    binding_hash: &[u8; 32],
+) -> [u8; 32] {
+    let mut hasher = Hasher::new();
+    hasher.update(prev_txid);
+    hasher.update(&prev_index.to_le_bytes());
+    hasher.update(ann_link_tag);
+    hasher.update(spend_public.as_bytes());
+    hasher.update(binding_hash);
+    hasher.update(blake3::hash(ring_proof).as_bytes());
+    hasher.finalize().into()
+}
+
+/// Compute the signing message for an input that is part of the provided binding.
+pub fn input_auth_message(input: &Input, binding_hash: &[u8; 32]) -> [u8; 32] {
+    auth_message_raw(
+        &input.prev_txid,
+        input.prev_index,
+        &input.ann_link_tag,
+        &input.spend_public,
+        &input.one_of_many_proof,
+        binding_hash,
+    )
+}
+
+/// Assemble a basic input by signing the binding-aware message with the spend key.
 pub fn build_signed_input(
     prev_txid: [u8; 32],
     prev_index: u32,
     spend_key: &SpendKeypair,
     ring_proof: Vec<u8>,
-    sighash: &[u8],
+    binding_hash: &[u8; 32],
 ) -> Input {
     let nonce = crypto::random_nonce::<16>();
     let link = compute_link_tag(&spend_key.public, &nonce);
-    let signature = crypto::sign(sighash, &spend_key.secret, AlgTag::Dilithium);
-    Input::new(prev_txid, prev_index, link, ring_proof, signature)
+    let message = auth_message_raw(
+        &prev_txid,
+        prev_index,
+        &link,
+        &spend_key.public,
+        &ring_proof,
+        binding_hash,
+    );
+    let signature = crypto::sign(&message, &spend_key.secret, AlgTag::Dilithium);
+    Input::new(
+        prev_txid,
+        prev_index,
+        link,
+        spend_key.public.clone(),
+        ring_proof,
+        signature,
+    )
 }
 
 /// Deterministically construct a stealth blob using the recipient's scan key.
@@ -249,5 +346,21 @@ mod tests {
             ))
             .build();
         assert_ne!(tx1.txid(), tx2.txid());
+    }
+
+    #[test]
+    fn link_tag_not_deterministic_with_builder() {
+        let km = KeyMaterial::random();
+        let spend = km.derive_spend_keypair(0);
+        let prev = [7u8; 32];
+        let outputs = vec![Output::new(vec![1], [0u8; 32], OutputMeta::default())];
+        let witness = Witness::default();
+        let binding = binding_hash(&outputs, &witness);
+
+        let first = build_signed_input(prev, 0, &spend, vec![0xAA], &binding);
+        let second = build_signed_input(prev, 0, &spend, vec![0xAA], &binding);
+
+        // The helper draws a fresh random nonce per call, so link tags differ and double-spend detection cannot rely on them.
+        assert_ne!(first.ann_link_tag, second.ann_link_tag);
     }
 }
