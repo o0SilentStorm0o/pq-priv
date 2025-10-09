@@ -270,10 +270,13 @@ mod tests {
         let params = ChainParams::default();
         let genesis = build_block([0u8; 32], 0, &params);
         let mut chain = ChainState::bootstrap(params.clone(), genesis).expect("bootstrap");
-        let mut good = mine_child_block(&chain, &params, 1_000 + params.target_spacing);
-        let bad_bits = good.header.n_bits.saturating_sub(1);
-        good.header.n_bits = bad_bits;
-        let err = chain.apply_block(good).expect_err("should reject");
+        let good = mine_child_block(&chain, &params, 1_000 + params.target_spacing);
+        let mut header = good.header.clone();
+        let txs = good.txs.clone();
+        let bad_bits = header.n_bits.saturating_sub(1);
+        header.n_bits = bad_bits;
+        let forged = mine_block(header, txs, &params.pow_limit);
+        let err = chain.apply_block(forged).expect_err("should reject");
         match err {
             ChainError::Consensus(ConsensusError::InvalidBits) => {}
             other => panic!("unexpected error: {other:?}"),
