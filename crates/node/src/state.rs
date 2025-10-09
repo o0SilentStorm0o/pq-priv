@@ -38,10 +38,12 @@ impl ChainState {
         })
     }
 
+    #[allow(dead_code)]
     pub fn height(&self) -> u64 {
         self.blocks.len().saturating_sub(1) as u64
     }
 
+    #[allow(dead_code)]
     pub fn best_hash(&self) -> [u8; 32] {
         self.blocks
             .last()
@@ -77,6 +79,7 @@ impl ChainState {
         next_difficulty(&self.params, &history)
     }
 
+    #[allow(dead_code)]
     pub fn has_utxo(&self, txid: &[u8; 32], index: u32) -> bool {
         let outpoint = OutPoint::new(*txid, index);
         self.utxo
@@ -85,6 +88,7 @@ impl ChainState {
             .unwrap_or(false)
     }
 
+    #[allow(dead_code)]
     pub fn params(&self) -> &ChainParams {
         &self.params
     }
@@ -93,12 +97,14 @@ impl ChainState {
         self.utxo.utxo_count()
     }
 
+    #[allow(dead_code)]
     pub fn has_block(&self, hash: &[u8; 32]) -> bool {
         self.blocks
             .iter()
             .any(|block| pow_hash(&block.header) == *hash)
     }
 
+    #[allow(dead_code)]
     pub fn block_bytes(&self, hash: &[u8; 32]) -> Option<Vec<u8>> {
         self.blocks
             .iter()
@@ -112,6 +118,7 @@ impl ChainState {
             .expect("chain must contain at least the genesis block")
     }
 
+    #[allow(dead_code)]
     pub fn block_locator(&self) -> Vec<[u8; 32]> {
         let mut locator = Vec::new();
         if self.blocks.is_empty() {
@@ -137,6 +144,7 @@ impl ChainState {
         locator
     }
 
+    #[allow(dead_code)]
     pub fn headers_for_locator(
         &self,
         locator: &[[u8; 32]],
@@ -153,10 +161,8 @@ impl ChainState {
         let mut headers = Vec::new();
         for block in self.blocks.iter().skip(start) {
             let hash = pow_hash(&block.header);
-            if let Some(stop_hash) = stop {
-                if hash == *stop_hash {
-                    break;
-                }
+            if stop.map(|stop_hash| hash == *stop_hash).unwrap_or(false) {
+                break;
             }
             headers.push(block.header.clone());
             if headers.len() >= limit {

@@ -118,7 +118,7 @@ fn map_network_error(err: NetworkError) -> HandshakeError {
         NetworkError::Io(io) => HandshakeError::Io(io),
         NetworkError::Handshake(inner) => inner,
         NetworkError::Capacity | NetworkError::UnknownPeer(_) | NetworkError::FrameTooLarge => {
-            HandshakeError::Io(io::Error::new(io::ErrorKind::Other, err))
+            HandshakeError::Io(io::Error::other(err))
         }
     }
 }

@@ -362,6 +362,9 @@ mod tests {
             .add_output(output)
             .set_witness(Witness::default())
             .build();
-        assert_eq!(merkle_root(&[tx.clone()]), *tx.txid().as_bytes());
+        assert_eq!(
+            merkle_root(std::slice::from_ref(&tx)),
+            *tx.txid().as_bytes()
+        );
     }
 }
