@@ -1,3 +1,4 @@
+use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 mod cfg;
@@ -11,9 +12,11 @@ use clap::{Parser, Subcommand};
 use consensus::{Block, BlockHeader, ChainParams, merkle_root, pow_hash};
 use crypto::{self, KeyMaterial};
 use pow::mine_block;
+use storage::{SnapshotConfig, Store};
 use tracing::info;
 use tx::{Output, OutputMeta, Tx, TxBuilder, Witness, build_stealth_blob};
 
+use crate::cfg::NodeConfig;
 use crate::state::ChainState;
 
 #[derive(Parser)]
@@ -50,11 +53,22 @@ fn main() {
 }
 
 fn run_node(blocks: u32) {
+    let config = NodeConfig::default();
     let params = ChainParams::default();
     let genesis = genesis_block(&params);
     info!(hash = ?pow_hash(&genesis.header), "Loaded genesis block");
+    fs::create_dir_all(&config.db_path).expect("create data dir");
+    fs::create_dir_all(&config.snapshots_path).expect("create snapshot dir");
+    let store = Store::open(&config.db_path).expect("open storage");
     let mut chain_state =
-        ChainState::bootstrap(params.clone(), genesis.clone()).expect("bootstrap chain");
+        ChainState::bootstrap(params.clone(), store, genesis.clone()).expect("bootstrap chain");
+    chain_state
+        .configure_snapshots(SnapshotConfig::new(
+            config.snapshots_path.clone(),
+            config.snapshot_interval,
+            config.snapshot_keep,
+        ))
+        .expect("configure snapshots");
     for height in 1..=blocks {
         let prev = chain_state.tip().clone();
         let n_bits = chain_state
@@ -69,7 +83,7 @@ fn run_node(blocks: u32) {
             height,
             hash = ?pow_hash(&block.header),
             nonce = block.header.nonce,
-            utxos = chain_state.utxo_count(),
+            utxos = chain_state.utxo_count().unwrap_or_default(),
             "Mined block"
         );
     }

@@ -1,9 +1,15 @@
 #![allow(dead_code)]
 
+use std::fmt::Write as FmtWrite;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::{Json, Router, extract::State, response::IntoResponse, routing::post};
+use axum::{
+    Json, Router,
+    extract::State,
+    response::IntoResponse,
+    routing::{get, post},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::task::JoinHandle;
@@ -14,8 +20,8 @@ use p2p::{Inventory, InventoryItem, NetMessage, PeerSummary};
 use parking_lot::Mutex;
 use tx::{Tx, TxId};
 
-use crate::mempool::{MempoolAddOutcome, MempoolRejection, TxPool};
-use crate::state::ChainState;
+use crate::mempool::{MempoolAddOutcome, MempoolRejection, TxPool, TxPoolStats};
+use crate::state::{ChainMetrics, ChainState};
 use p2p::NetworkHandle;
 
 #[derive(Clone)]
@@ -48,6 +54,59 @@ impl RpcContext {
 
     fn peers(&self) -> Vec<PeerSummary> {
         self.network.peer_info()
+    }
+
+    fn metrics_snapshot(&self) -> MetricsSnapshot {
+        let (chain_metrics, db_stats) = {
+            let guard = self.chain.lock();
+            (guard.metrics(), guard.db_stats())
+        };
+        MetricsSnapshot {
+            chain: chain_metrics,
+            mempool: self.mempool.stats(),
+            peer_count: self.network.peer_info().len(),
+            running_compactions: db_stats.running_compactions,
+        }
+    }
+
+    fn render_metrics(&self) -> String {
+        let snapshot = self.metrics_snapshot();
+        let mut body = String::new();
+        let _ = writeln!(body, "pqpriv_peers {}", snapshot.peer_count);
+        let _ = writeln!(body, "pqpriv_tip_height {}", snapshot.chain.height);
+        let _ = writeln!(
+            body,
+            "pqpriv_cumulative_work {}",
+            snapshot.chain.cumulative_work_f64()
+        );
+        let _ = writeln!(
+            body,
+            "pqpriv_current_target {}",
+            snapshot.chain.current_target
+        );
+        let _ = writeln!(body, "pqpriv_mempool_size {}", snapshot.mempool.tx_count);
+        let _ = writeln!(
+            body,
+            "pqpriv_mempool_bytes {}",
+            snapshot.mempool.total_bytes
+        );
+        let _ = writeln!(
+            body,
+            "pqpriv_orphan_count {}",
+            snapshot.mempool.orphan_count
+        );
+        let _ = writeln!(
+            body,
+            "pqpriv_db_compactions {}",
+            snapshot.running_compactions
+        );
+        let _ = writeln!(body, "pqpriv_reorg_count {}", snapshot.chain.reorg_count);
+        let _ = writeln!(
+            body,
+            "pqpriv_batch_commit_ms {:.3}",
+            snapshot.chain.last_commit_ms
+        );
+        body
     }
 
     fn submit_transaction(&self, tx: Tx, bytes: Vec<u8>) -> Result<TxId, RpcError> {
@@ -91,6 +150,13 @@ struct ChainSnapshot {
     best_hash: [u8; 32],
 }
 
+struct MetricsSnapshot {
+    chain: ChainMetrics,
+    mempool: TxPoolStats,
+    peer_count: usize,
+    running_compactions: u64,
+}
+
 #[derive(Deserialize)]
 struct RpcRequest {
     jsonrpc: String,
@@ -130,6 +196,7 @@ pub async fn spawn_rpc_server(
 ) -> Result<JoinHandle<()>, anyhow::Error> {
     let router = Router::new()
         .route("/", post(handle_rpc))
+        .route("/metrics", get(handle_metrics))
         .with_state(Arc::new(ctx));
     let listener = tokio::net::TcpListener::bind(listen).await?;
     info!(%listen, "rpc listening");
@@ -139,6 +206,10 @@ pub async fn spawn_rpc_server(
         }
     });
     Ok(handle)
+}
+
+async fn handle_metrics(State(ctx): State<Arc<RpcContext>>) -> String {
+    ctx.render_metrics()
 }
 
 async fn handle_rpc(
@@ -263,6 +334,13 @@ fn failure(id: Option<Value>, error: RpcError) -> RpcResponse {
 fn map_rejection(reason: MempoolRejection) -> RpcError {
     match reason {
         MempoolRejection::PoolFull => RpcError::new(-26, "mempool full"),
+        MempoolRejection::FeeTooLow { required, actual } => RpcError::new(
+            -26,
+            format!(
+                "fee too low: required {} sat/vb, actual {}",
+                required, actual
+            ),
+        ),
         MempoolRejection::DuplicateLinkTag(tag) => {
             RpcError::new(-26, format!("duplicate link tag: {}", hex::encode(tag)))
         }
@@ -280,6 +358,91 @@ fn map_rejection(reason: MempoolRejection) -> RpcError {
         MempoolRejection::OrphanLimit => RpcError::new(-26, "orphan pool full"),
         MempoolRejection::CoinbaseForbidden => {
             RpcError::new(-26, "coinbase transactions not allowed")
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mempool::{TxPool, TxPoolConfig};
+    use crate::state::ChainState;
+    use consensus::{Block, BlockHeader, ChainParams, merkle_root};
+    use crypto::{KeyMaterial, commitment};
+    use p2p::{P2pConfig, Version, start_network};
+    use parking_lot::Mutex;
+    use pow::mine_block;
+    use std::sync::Arc;
+    use storage::Store;
+    use tempfile::tempdir;
+    use tx::{Output, OutputMeta, TxBuilder, Witness, build_stealth_blob};
+
+    fn build_block(prev_hash: [u8; 32], seed: u64, params: &ChainParams) -> Block {
+        let tx = coinbase(seed);
+        let txs = vec![tx.clone()];
+        let header = BlockHeader {
+            version: 1,
+            prev_hash,
+            merkle_root: merkle_root(&txs),
+            utxo_root: [0u8; 32],
+            time: seed,
+            n_bits: 0x207fffff,
+            nonce: 0,
+            alg_tag: 1,
+        };
+        mine_block(header, txs, &params.pow_limit)
+    }
+
+    fn coinbase(seed: u64) -> tx::Tx {
+        let material = KeyMaterial::random();
+        let scan = material.derive_scan_keypair(0);
+        let spend = material.derive_spend_keypair(0);
+        let stealth = build_stealth_blob(&scan.public, &spend.public, &seed.to_le_bytes());
+        let commitment = commitment(50, &seed.to_le_bytes());
+        TxBuilder::new()
+            .add_output(Output::new(
+                stealth,
+                commitment,
+                OutputMeta {
+                    deposit_flag: false,
+                    deposit_id: None,
+                },
+            ))
+            .set_witness(Witness {
+                range_proofs: Vec::new(),
+                stamp: seed,
+                extra: Vec::new(),
+            })
+            .build()
+    }
+
+    #[tokio::test]
+    async fn metrics_endpoint_exposes_expected_gauges() {
+        let params = ChainParams::default();
+        let dir = tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let genesis = build_block([0u8; 32], 0, &params);
+        let chain = ChainState::bootstrap(params.clone(), store, genesis).expect("bootstrap");
+        let chain = Arc::new(Mutex::new(chain));
+        let mempool = Arc::new(TxPool::new(TxPoolConfig::default()));
+        let mut config = P2pConfig::default();
+        config.listen = "127.0.0.1:0".parse().unwrap();
+        let version = Version::user_agent("test", 0);
+        let network = start_network(config, version).await.expect("start network");
+        let ctx = Arc::new(RpcContext::new(mempool, chain, network));
+        let body = handle_metrics(State(ctx)).await;
+        for metric in [
+            "pqpriv_peers",
+            "pqpriv_tip_height",
+            "pqpriv_cumulative_work",
+            "pqpriv_current_target",
+            "pqpriv_mempool_size",
+            "pqpriv_orphan_count",
+            "pqpriv_db_compactions",
+            "pqpriv_reorg_count",
+            "pqpriv_batch_commit_ms",
+        ] {
+            assert!(body.contains(metric), "missing metric {metric}");
         }
     }
 }

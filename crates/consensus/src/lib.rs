@@ -40,6 +40,8 @@ pub struct Block {
 pub enum ConsensusError {
     #[error("insufficient work")]
     InsufficientWork,
+    #[error("target overflow")]
+    TargetOverflow,
     #[error("invalid difficulty bits")]
     InvalidBits,
     #[error("invalid timestamp")]
@@ -71,6 +73,27 @@ pub fn validate_pow(header: &BlockHeader, pow_limit: &[u8; 32]) -> Result<(), Co
     } else {
         Err(ConsensusError::InsufficientWork)
     }
+}
+
+/// Compute the amount of work contributed by a block with the provided target.
+pub fn block_work(bits: u32) -> Result<BigUint, ConsensusError> {
+    let target = Target::from_compact(bits)?;
+    if target.is_zero() {
+        return Err(ConsensusError::TargetOverflow);
+    }
+    let target_value = target.to_biguint();
+    if target_value.is_zero() {
+        return Err(ConsensusError::TargetOverflow);
+    }
+    let numerator = BigUint::one() << 256;
+    let work = numerator / (target_value + BigUint::one());
+    Ok(work)
+}
+
+/// Accumulate work by adding the contribution of the next block.
+pub fn cumulative_work(prev: &BigUint, bits: u32) -> Result<BigUint, ConsensusError> {
+    let work = block_work(bits)?;
+    Ok(prev + work)
 }
 
 /// Parameters controlling chain behaviour (subset of what will be needed later).
@@ -139,6 +162,10 @@ impl Target {
         let start = 32 - src.len();
         bytes[start..].copy_from_slice(&src);
         Self { bytes }
+    }
+
+    pub fn is_zero(&self) -> bool {
+        self.bytes.iter().all(|b| *b == 0)
     }
 
     pub fn to_compact(&self) -> u32 {
@@ -366,5 +393,15 @@ mod tests {
             merkle_root(std::slice::from_ref(&tx)),
             *tx.txid().as_bytes()
         );
+    }
+
+    #[test]
+    fn cumulative_work_increases_with_harder_targets() {
+        let easy = block_work(0x207fffff).expect("work");
+        assert!(easy > BigUint::zero());
+        let harder = block_work(0x1f07ffff).expect("work");
+        assert!(harder > easy);
+        let total = cumulative_work(&BigUint::zero(), 0x207fffff).expect("cumulative");
+        assert_eq!(total, easy);
     }
 }

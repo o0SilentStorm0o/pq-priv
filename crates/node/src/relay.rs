@@ -1,14 +1,14 @@
-#![allow(dead_code)]
-
 use std::sync::Arc;
 
 use codec::from_slice_cbor;
+use consensus::{Block, BlockHeader};
 use p2p::{InvType, Inventory, InventoryItem, NetMessage, PeerId};
 use tracing::{debug, warn};
 use tx::{Tx, TxId};
 
 use crate::mempool::{MempoolAddOutcome, MempoolRejection, TxPool};
 use crate::state::ChainState;
+use crate::sync::SyncManager;
 use p2p::NetworkHandle;
 use parking_lot::Mutex;
 
@@ -17,6 +17,7 @@ pub struct Relay {
     mempool: Arc<TxPool>,
     chain: Arc<Mutex<ChainState>>,
     network: NetworkHandle,
+    sync: Arc<SyncManager>,
 }
 
 impl Relay {
@@ -24,40 +25,53 @@ impl Relay {
         mempool: Arc<TxPool>,
         chain: Arc<Mutex<ChainState>>,
         network: NetworkHandle,
+        sync: Arc<SyncManager>,
     ) -> Self {
         Self {
             mempool,
             chain,
             network,
+            sync,
         }
     }
 
     pub fn handle_inv(&self, peer_id: PeerId, inventory: Inventory) {
-        let mut to_request = Vec::new();
-        for item in inventory.items {
-            match item.kind {
-                InvType::Transaction => {
-                    let txid = TxId(item.hash);
-                    if !self.mempool.contains(&txid) {
-                        to_request.push(item);
+        let mut tx_requests = Vec::new();
+        let mut block_candidates = Vec::new();
+        {
+            let chain = self.chain.lock();
+            for item in inventory.items {
+                match item.kind {
+                    InvType::Transaction => {
+                        let txid = TxId(item.hash);
+                        if !self.mempool.contains(&txid) {
+                            tx_requests.push(InventoryItem::tx(*txid.as_bytes()));
+                        }
                     }
-                }
-                InvType::Block => {
-                    let known = {
-                        let chain = self.chain.lock();
-                        chain.has_block(&item.hash)
-                    };
-                    if !known {
-                        to_request.push(item);
+                    InvType::Block => {
+                        if chain.has_block(&item.hash) {
+                            continue;
+                        }
+                        block_candidates.push(item);
                     }
                 }
             }
         }
-        if !to_request.is_empty() {
+
+        if !tx_requests.is_empty() {
             let _ = self.network.send(
                 peer_id,
-                NetMessage::GetData(Inventory { items: to_request }),
+                NetMessage::GetData(Inventory { items: tx_requests }),
             );
+        }
+
+        if !block_candidates.is_empty() {
+            let filtered = self.sync.filter_inventory(&Inventory {
+                items: block_candidates,
+            });
+            if !filtered.items.is_empty() {
+                let _ = self.network.send(peer_id, NetMessage::GetData(filtered));
+            }
         }
     }
 
@@ -112,6 +126,27 @@ impl Relay {
             Err(err) => {
                 warn!(%peer_id, error = ?err, "failed to decode transaction from peer");
             }
+        }
+    }
+
+    pub fn handle_block(&self, peer_id: PeerId, bytes: Vec<u8>) {
+        match from_slice_cbor::<Block>(&bytes) {
+            Ok(block) => {
+                let mut chain = self.chain.lock();
+                match self.sync.process_block(block, &mut chain) {
+                    Ok(applied) => {
+                        if !applied.is_empty() {
+                            let items = applied.into_iter().map(InventoryItem::block).collect();
+                            self.network.broadcast_except(
+                                NetMessage::Inv(Inventory { items }),
+                                Some(peer_id),
+                            );
+                        }
+                    }
+                    Err(err) => warn!(%peer_id, error = ?err, "block rejected"),
+                }
+            }
+            Err(err) => warn!(%peer_id, error = ?err, "failed to decode block"),
         }
     }
 
