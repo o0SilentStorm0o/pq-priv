@@ -25,8 +25,10 @@ parking_lot = "0.12"
 axum = { version = "0.7", default-features = false, features = ["json", "macros", "tokio", "http1"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tokio = { version = "1.37", features = ["macros", "rt-multi-thread", "net", "time"] }
+tokio = { version = "1.37", features = ["macros", "rt-multi-thread", "net", "time", "signal"] }
 anyhow = "1.0"
+toml = "0.8"
 
 [dev-dependencies]
 tempfile = "3.10"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }

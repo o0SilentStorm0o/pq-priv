@@ -3,24 +3,46 @@ version: "3.9"
 services:
   node_a:
     image: pqpriv:dev
-    command: ["node", "run", "--p2p-listen", "0.0.0.0:8644", "--rpc-listen", "0.0.0.0:8645", "--blocks", "0"]
+    command: ["run", "--config", "/home/pqpriv/node_a.toml"]
     ports:
       - "8644:8644"
       - "8645:8645"
+    volumes:
+      - node_a_data:/home/pqpriv/.pqpriv
+      - ./node_a.toml:/home/pqpriv/node_a.toml:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8645 && printf "GET /metrics HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n" >&3 && read -r line <&3 && [[ $line == HTTP/* ]]'",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
   node_b:
     image: pqpriv:dev
-    command: [
-      "node",
-      "run",
-      "--p2p-listen",
-      "0.0.0.0:8744",
-      "--rpc-listen",
-      "0.0.0.0:8745",
-      "--seed",
-      "node_a:8644",
-      "--blocks",
-      "0"
-    ]
+    command: ["run", "--config", "/home/pqpriv/node_b.toml"]
+    depends_on:
+      node_a:
+        condition: service_healthy
     ports:
       - "8744:8744"
       - "8745:8745"
+    volumes:
+      - node_b_data:/home/pqpriv/.pqpriv
+      - ./node_b.toml:/home/pqpriv/node_b.toml:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8745 && printf "GET /metrics HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n" >&3 && read -r line <&3 && [[ $line == HTTP/* ]]'",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  node_a_data:
+  node_b_data:

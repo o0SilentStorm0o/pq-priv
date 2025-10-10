@@ -21,7 +21,7 @@ impl SnapshotConfig {
     }
 
     pub fn should_snapshot(&self, height: u64) -> bool {
-        self.interval > 0 && height % self.interval == 0
+        self.interval != 0 && height.is_multiple_of(self.interval)
     }
 }
 
@@ -57,7 +57,7 @@ impl CheckpointManager {
             .filter_map(|entry| entry.ok().map(|e| e.path()))
             .filter(|path| path.is_dir())
             .collect();
-        snapshots.sort_by(|a, b| a.cmp(b));
+        snapshots.sort();
         while snapshots.len() > config.keep {
             let path = snapshots.remove(0);
             fs::remove_dir_all(&path)?;
