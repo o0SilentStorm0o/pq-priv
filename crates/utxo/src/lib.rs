@@ -55,6 +55,8 @@ pub enum UtxoError {
     InvalidProof,
     #[error("signature failed to verify")]
     InvalidSignature,
+    #[error("storage backend error: {0}")]
+    Backend(String),
 }
 
 /// Backend interface used by the ledger applicator.
@@ -64,6 +66,7 @@ pub trait UtxoBackend {
     fn remove(&mut self, outpoint: &OutPoint) -> Result<Option<OutputRecord>, UtxoError>;
     fn contains_link_tag(&self, tag: &[u8; 32]) -> Result<bool, UtxoError>;
     fn record_link_tag(&mut self, tag: [u8; 32]) -> Result<(), UtxoError>;
+    fn remove_link_tag(&mut self, tag: &[u8; 32]) -> Result<(), UtxoError>;
     fn allocate_compact_index(&mut self) -> Result<u64, UtxoError>;
 }
 
@@ -108,10 +111,35 @@ impl UtxoBackend for MemoryUtxoStore {
         Ok(())
     }
 
+    fn remove_link_tag(&mut self, tag: &[u8; 32]) -> Result<(), UtxoError> {
+        self.seen_tags.remove(tag);
+        Ok(())
+    }
+
     fn allocate_compact_index(&mut self) -> Result<u64, UtxoError> {
         let index = self.next_compact;
         self.next_compact = self.next_compact.saturating_add(1);
         Ok(index)
+    }
+}
+
+/// Captures the information necessary to revert a block application.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BlockUndo {
+    spent: Vec<(OutPoint, OutputRecord)>,
+}
+
+impl BlockUndo {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push_spent(&mut self, outpoint: OutPoint, record: OutputRecord) {
+        self.spent.push((outpoint, record));
+    }
+
+    pub fn spent(&self) -> &[(OutPoint, OutputRecord)] {
+        &self.spent
     }
 }
 
@@ -120,7 +148,7 @@ pub fn apply_block<B: UtxoBackend>(
     store: &mut B,
     block: &Block,
     height: u64,
-) -> Result<(), UtxoError> {
+) -> Result<BlockUndo, UtxoError> {
     if block.txs.is_empty() {
         return Err(UtxoError::EmptyBlock);
     }
@@ -130,6 +158,7 @@ pub fn apply_block<B: UtxoBackend>(
     let mut new_tags: Vec<[u8; 32]> = Vec::new();
     let mut block_tags: HashSet<[u8; 32]> = HashSet::new();
     let mut produced: Vec<(OutPoint, OutputRecord)> = Vec::new();
+    let mut undo = BlockUndo::new();
 
     for (tx_index, tx) in block.txs.iter().enumerate() {
         let binding = tx::binding_hash(&tx.outputs, &tx.witness);
@@ -159,14 +188,14 @@ pub fn apply_block<B: UtxoBackend>(
         let removed = store
             .remove(outpoint)?
             .ok_or(UtxoError::MissingOutPoint(*outpoint))?;
-        drop(removed);
+        undo.push_spent(*outpoint, removed);
     }
 
     for (outpoint, record) in produced {
         store.insert(outpoint, record)?;
     }
 
-    Ok(())
+    Ok(undo)
 }
 
 fn consume_inputs<B: UtxoBackend>(
@@ -218,6 +247,42 @@ fn collect_outputs<B: UtxoBackend>(
         let record = OutputRecord::new(output, height, compact_index);
         produced.push((outpoint, record));
     }
+    Ok(())
+}
+
+/// Revert the effects of a block using the supplied undo data.
+pub fn undo_block<B: UtxoBackend>(
+    store: &mut B,
+    block: &Block,
+    undo: &BlockUndo,
+) -> Result<(), UtxoError> {
+    if block.txs.is_empty() {
+        return Err(UtxoError::EmptyBlock);
+    }
+
+    // Remove outputs created by the block in reverse order.
+    for tx in block.txs.iter().rev() {
+        let txid = tx.txid();
+        for (index, _) in tx.outputs.iter().enumerate().rev() {
+            let outpoint = OutPoint::new(*txid.as_bytes(), index as u32);
+            store
+                .remove(&outpoint)?
+                .ok_or(UtxoError::MissingOutPoint(outpoint))?;
+        }
+    }
+
+    // Remove linkability tags introduced by the block.
+    for tx in block.txs.iter().skip(1) {
+        for input in &tx.inputs {
+            store.remove_link_tag(&input.ann_link_tag)?;
+        }
+    }
+
+    // Reinsert previously spent outputs.
+    for (outpoint, record) in undo.spent().iter().rev() {
+        store.insert(*outpoint, record.clone())?;
+    }
+
     Ok(())
 }
 
@@ -275,8 +340,9 @@ mod tests {
     fn coinbase_adds_utxo() {
         let mut store = MemoryUtxoStore::new();
         let block = assemble_block(vec![coinbase(50)]);
-        apply_block(&mut store, &block, 1).expect("apply block");
+        let undo = apply_block(&mut store, &block, 1).expect("apply block");
         assert_eq!(store.utxo_count(), 1);
+        assert!(undo.spent().is_empty());
     }
 
     #[test]
@@ -317,7 +383,7 @@ mod tests {
         let binding = binding_hash(&[], &Witness::default());
         let spend_input = build_signed_input(txid, 0, &spend, vec![2], &binding);
         let spend = TxBuilder::new().add_input(spend_input.clone()).build();
-        apply_block(
+        let _ = apply_block(
             &mut store,
             &assemble_block(vec![coinbase(1), spend.clone()]),
             2,
@@ -339,5 +405,55 @@ mod tests {
         let block = assemble_block(vec![coinbase(1), spend]);
         let err = apply_block(&mut store, &block, 1).unwrap_err();
         assert!(matches!(err, UtxoError::MissingOutPoint(_)));
+    }
+
+    #[test]
+    fn undo_restores_previous_state() {
+        let mut store = MemoryUtxoStore::new();
+        let material = KeyMaterial::random();
+        let scan = material.derive_scan_keypair(0);
+        let spend = material.derive_spend_keypair(0);
+        let stealth = tx::build_stealth_blob(&scan.public, &spend.public, b"coinbase");
+        let commitment = crypto::commitment(50, b"coinbase");
+        let coinbase_tx = TxBuilder::new()
+            .add_output(Output::new(
+                stealth,
+                commitment,
+                OutputMeta {
+                    deposit_flag: false,
+                    deposit_id: None,
+                },
+            ))
+            .set_witness(Witness::default())
+            .build();
+        let coin_block = assemble_block(vec![coinbase_tx.clone()]);
+        let _ = apply_block(&mut store, &coin_block, 1).expect("apply coinbase");
+
+        let coin_out = OutPoint::new(*coinbase_tx.txid().as_bytes(), 0);
+        assert!(store.get(&coin_out).unwrap().is_some());
+
+        let spend_output = Output::new(vec![9], [11u8; 32], OutputMeta::default());
+        let witness = Witness::default();
+        let binding = binding_hash(&[spend_output.clone()], &witness);
+        let spend_input = build_signed_input(
+            *coinbase_tx.txid().as_bytes(),
+            0,
+            &spend,
+            vec![1, 2, 3],
+            &binding,
+        );
+        let spend_tx = TxBuilder::new()
+            .add_input(spend_input.clone())
+            .add_output(spend_output)
+            .set_witness(witness)
+            .build();
+        let block = assemble_block(vec![coinbase(1), spend_tx]);
+
+        let undo = apply_block(&mut store, &block, 2).expect("apply block");
+        assert!(store.get(&coin_out).unwrap().is_none());
+
+        undo_block(&mut store, &block, &undo).expect("undo block");
+        let restored = store.get(&coin_out).unwrap();
+        assert!(restored.is_some());
     }
 }
