@@ -1,0 +1,8 @@
+p2p_listen = "0.0.0.0:8744"
+rpc_listen = "0.0.0.0:8745"
+seeds = ["node_a:8644"]
+db_path = ".pqpriv/node"
+snapshots_path = ".pqpriv/snapshots"
+snapshot_interval = 120
+snapshot_keep = 2
+sync_orphan_limit = 8192

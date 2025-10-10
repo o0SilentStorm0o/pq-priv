@@ -96,7 +96,7 @@ impl UtxoBackend for RocksUtxoStore {
         let next = current.saturating_add(1);
         let next_bytes = schema::encode_height(next);
         self.db
-            .put_cf(cf_meta, key, &next_bytes)
+            .put_cf(cf_meta, key, next_bytes)
             .map_err(Self::db_err)?;
         Ok(current)
     }

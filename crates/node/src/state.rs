@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::sync::Arc;
 use std::time::Instant;
 
 use codec::to_vec_cbor;
@@ -12,8 +13,12 @@ use num_bigint::BigUint;
 use num_traits::{ToPrimitive, Zero};
 use storage::{CheckpointManager, RocksUtxoStore, SnapshotConfig, StorageError, Store, TipInfo};
 use thiserror::Error;
-use tracing::{debug, info};
+use tokio::sync::broadcast;
+use tracing::{debug, info, warn};
+use tx::{Tx, TxId};
 use utxo::{BlockUndo, OutPoint, UtxoBackend, UtxoError, apply_block, undo_block};
+
+use crate::mempool::{MempoolAddOutcome, TxPool};
 
 #[derive(Debug, Error)]
 pub enum ChainError {
@@ -31,6 +36,17 @@ pub enum ChainError {
     MissingUndo([u8; 32]),
     #[error("reorg failed: {0}")]
     ReorgFailure(String),
+}
+
+const CHAIN_EVENT_BUFFER: usize = 64;
+
+#[derive(Clone, Debug)]
+pub enum ChainEvent {
+    TipUpdated {
+        height: u64,
+        hash: [u8; 32],
+        header: BlockHeader,
+    },
 }
 
 #[derive(Clone)]
@@ -61,6 +77,8 @@ pub struct ChainState {
     snapshot_config: Option<SnapshotConfig>,
     checkpoint_manager: Option<CheckpointManager>,
     last_commit_ms: f64,
+    events: broadcast::Sender<ChainEvent>,
+    mempool: Option<Arc<TxPool>>,
 }
 
 impl ChainState {
@@ -73,6 +91,7 @@ impl ChainState {
             return Err(ChainError::InvalidGenesis);
         }
         let utxo = store.new_utxo_store();
+        let (events, _) = broadcast::channel(CHAIN_EVENT_BUFFER);
         let mut state = Self {
             params,
             store,
@@ -86,6 +105,8 @@ impl ChainState {
             snapshot_config: None,
             checkpoint_manager: None,
             last_commit_ms: 0.0,
+            events,
+            mempool: None,
         };
         state.initialize(genesis)?;
         Ok(state)
@@ -107,6 +128,14 @@ impl ChainState {
         let current_height = self.height();
         self.maybe_snapshot(current_height)?;
         Ok(())
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<ChainEvent> {
+        self.events.subscribe()
+    }
+
+    pub fn attach_mempool(&mut self, mempool: Arc<TxPool>) {
+        self.mempool = Some(mempool);
     }
 
     fn install_genesis(&mut self, genesis: Block) -> Result<(), ChainError> {
@@ -139,6 +168,7 @@ impl ChainState {
         self.active_tip = Some(hash);
         self.active_work = work;
         self.last_commit_ms = 0.0;
+        self.publish_tip(hash, 0);
         Ok(())
     }
 
@@ -157,7 +187,7 @@ impl ChainState {
             let parent = if height == 0 {
                 None
             } else {
-                Some(self.active_chain[(height - 1) as usize])
+                Some(self.active_chain[height - 1])
             };
             let undo = apply_block(&mut self.utxo, &block, height as u64)?;
             let work = block_work(block.header.n_bits)?;
@@ -185,6 +215,10 @@ impl ChainState {
             self.active_work = cumulative;
         }
         self.last_commit_ms = 0.0;
+        if let Some(tip) = self.active_tip {
+            let height = self.height();
+            self.publish_tip(tip, height);
+        }
         Ok(())
     }
 
@@ -251,6 +285,7 @@ impl ChainState {
         height: u64,
         cumulative: BigUint,
     ) -> Result<(), ChainError> {
+        let confirmed = Self::confirmed_txids(&block);
         let mut batch = self.store.begin_block_batch()?;
         let start = Instant::now();
         let undo = {
@@ -286,6 +321,8 @@ impl ChainState {
             duration_ms,
             "block applied to active chain"
         );
+        self.publish_tip(hash, height);
+        self.remove_confirmed(&confirmed);
         Ok(())
     }
 
@@ -333,6 +370,7 @@ impl ChainState {
         &self.params
     }
 
+    #[allow(dead_code)]
     pub fn utxo_count(&self) -> Result<usize, ChainError> {
         Ok(self.store.utxo_len()?)
     }
@@ -387,19 +425,15 @@ impl ChainState {
     ) -> Vec<BlockHeader> {
         let mut start_height = 0usize;
         for hash in locator {
-            if let Some(entry) = self.index.get(hash) {
-                if entry.active {
-                    start_height = entry.height as usize + 1;
-                    break;
-                }
+            if let Some(entry) = self.index.get(hash).filter(|entry| entry.active) {
+                start_height = entry.height as usize + 1;
+                break;
             }
         }
         let mut headers = Vec::new();
         for hash in self.active_chain.iter().skip(start_height) {
-            if let Some(stop_hash) = stop {
-                if hash == stop_hash {
-                    break;
-                }
+            if stop.is_some_and(|stop_hash| hash == stop_hash) {
+                break;
             }
             headers.push(self.index[hash].header().clone());
             if headers.len() >= limit {
@@ -460,6 +494,75 @@ impl ChainState {
         Ok(())
     }
 
+    fn publish_tip(&self, hash: [u8; 32], height: u64) {
+        if let Some(entry) = self.index.get(&hash) {
+            let _ = self.events.send(ChainEvent::TipUpdated {
+                height,
+                hash,
+                header: entry.header().clone(),
+            });
+        }
+    }
+
+    fn confirmed_txids(block: &Block) -> Vec<TxId> {
+        block.txs.iter().skip(1).map(|tx| tx.txid()).collect()
+    }
+
+    fn remove_confirmed(&self, txids: &[TxId]) {
+        if txids.is_empty() {
+            return;
+        }
+        if let Some(pool) = &self.mempool {
+            pool.remove_confirmed(txids);
+        }
+    }
+
+    fn collect_confirmed_txids(&self, hashes: &[[u8; 32]]) -> Vec<TxId> {
+        let mut txids = Vec::new();
+        for hash in hashes {
+            if let Some(entry) = self.index.get(hash) {
+                txids.extend(entry.block.txs.iter().skip(1).map(|tx| tx.txid()));
+            }
+        }
+        txids
+    }
+
+    fn collect_detached_transactions(&self, hashes: &[[u8; 32]]) -> Vec<Tx> {
+        let mut txs = Vec::new();
+        for hash in hashes.iter().rev() {
+            if let Some(entry) = self.index.get(hash) {
+                txs.extend(entry.block.txs.iter().skip(1).cloned());
+            }
+        }
+        txs
+    }
+
+    fn reintroduce_transactions(&self, txs: Vec<Tx>, skip: &HashSet<TxId>) {
+        let Some(pool) = &self.mempool else {
+            return;
+        };
+        for tx in txs {
+            let txid = tx.txid();
+            if skip.contains(&txid) {
+                continue;
+            }
+            let outcome =
+                pool.accept_transaction(tx, None, |txid, index| self.has_utxo(txid, index));
+            match outcome {
+                MempoolAddOutcome::Accepted { txid } => {
+                    debug!(%txid, "reintroduced transaction after reorg");
+                }
+                MempoolAddOutcome::Duplicate => {}
+                MempoolAddOutcome::StoredOrphan { missing } => {
+                    debug!(txid = %txid, missing = missing.len(), "reintroduced transaction stored as orphan after reorg");
+                }
+                MempoolAddOutcome::Rejected(reason) => {
+                    warn!(%txid, ?reason, "failed to reintroduce transaction after reorg");
+                }
+            }
+        }
+    }
+
     fn perform_reorg(&mut self, new_tip: [u8; 32]) -> Result<(), ChainError> {
         let old_tip = self
             .active_tip
@@ -498,6 +601,15 @@ impl ChainState {
             cursor = self.index.get(&hash).and_then(|entry| entry.parent);
         }
         attach.reverse();
+
+        let mempool_payload = if self.mempool.is_some() {
+            Some((
+                self.collect_confirmed_txids(&attach),
+                self.collect_detached_transactions(&detach),
+            ))
+        } else {
+            None
+        };
 
         let mut batch = self.store.begin_block_batch()?;
         let start = Instant::now();
@@ -571,6 +683,17 @@ impl ChainState {
             duration_ms,
             "chain reorg"
         );
+        self.publish_tip(tip_hash, tip_height);
+        if let Some((attach_txids, detached_txs)) = mempool_payload {
+            if !attach_txids.is_empty() {
+                self.remove_confirmed(&attach_txids);
+            }
+            let mut skip = HashSet::with_capacity(attach_txids.len());
+            for txid in &attach_txids {
+                skip.insert(*txid);
+            }
+            self.reintroduce_transactions(detached_txs, &skip);
+        }
         Ok(())
     }
 
@@ -607,7 +730,7 @@ pub struct ChainMetrics {
 
 impl ChainMetrics {
     pub fn cumulative_work_f64(&self) -> f64 {
-        self.cumulative_work.to_f64().unwrap_or(std::f64::MAX)
+        self.cumulative_work.to_f64().unwrap_or(f64::MAX)
     }
 }
 
@@ -621,9 +744,15 @@ mod tests {
     use consensus::BlockHeader;
     use crypto::KeyMaterial;
     use pow::mine_block;
+    use std::sync::Arc;
     use storage::Store;
     use tempfile::tempdir;
-    use tx::{Output, OutputMeta, TxBuilder, Witness, build_stealth_blob};
+    use tx::{
+        Output, OutputMeta, TxBuilder, Witness, binding_hash, build_signed_input,
+        build_stealth_blob,
+    };
+
+    use crate::mempool::{MempoolAddOutcome, TxPool, TxPoolConfig};
 
     #[test]
     fn rejects_block_with_wrong_prev_hash() {
@@ -749,6 +878,228 @@ mod tests {
         assert_eq!(chain.height(), 1);
     }
 
+    #[test]
+    fn emits_tip_update_events() {
+        let params = ChainParams::default();
+        let dir = tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let genesis = build_block([0u8; 32], 0, &params);
+        let mut chain = ChainState::bootstrap(params.clone(), store, genesis).expect("bootstrap");
+        let mut rx = chain.subscribe();
+        let block = mine_child_block(&chain, &params, 2_000);
+        chain.apply_block(block.clone()).expect("apply block");
+        match rx.try_recv() {
+            Ok(ChainEvent::TipUpdated {
+                height,
+                hash,
+                header,
+            }) => {
+                assert_eq!(height, 1);
+                assert_eq!(hash, pow_hash(&block.header));
+                assert_eq!(header, block.header);
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn removes_confirmed_transactions_from_mempool() {
+        let params = ChainParams::default();
+        let dir = tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let genesis = build_block([0u8; 32], 0, &params);
+        let mut chain = ChainState::bootstrap(params.clone(), store, genesis).expect("bootstrap");
+
+        let mempool = Arc::new(TxPool::new(TxPoolConfig::default()));
+        chain.attach_mempool(Arc::clone(&mempool));
+
+        let base_time = 1_000 + params.target_spacing;
+        let coin_material = KeyMaterial::random();
+        let coin_spend = coin_material.derive_spend_keypair(0);
+        let block1 = mine_active_block(
+            &chain,
+            &params,
+            vec![coinbase_with_material(&coin_material, base_time)],
+            base_time,
+        );
+        let coinbase_txid = block1.txs[0].txid();
+        chain.apply_block(block1).expect("apply block 1");
+
+        let spend_output = Output::new(vec![5, 6, 7], [9u8; 32], OutputMeta::default());
+        let witness = Witness {
+            range_proofs: Vec::new(),
+            stamp: base_time + 1,
+            extra: (5_000u64).to_le_bytes().to_vec(),
+        };
+        let binding = binding_hash(&[spend_output.clone()], &witness);
+        let spend_input = build_signed_input(
+            *coinbase_txid.as_bytes(),
+            0,
+            &coin_spend,
+            vec![1, 2, 3],
+            &binding,
+        );
+        let spend_tx = TxBuilder::new()
+            .add_input(spend_input)
+            .add_output(spend_output)
+            .set_witness(witness)
+            .build();
+
+        let outcome = mempool.accept_transaction(spend_tx.clone(), None, |txid, index| {
+            chain.has_utxo(txid, index)
+        });
+        assert!(matches!(outcome, MempoolAddOutcome::Accepted { .. }));
+        assert!(mempool.contains(&spend_tx.txid()));
+
+        let next_material = KeyMaterial::random();
+        let coinbase2 = coinbase_with_material(&next_material, base_time + params.target_spacing);
+        let block2_time = chain.tip().header.time + params.target_spacing;
+        let block2 = mine_active_block(
+            &chain,
+            &params,
+            vec![coinbase2, spend_tx.clone()],
+            block2_time,
+        );
+        chain.apply_block(block2).expect("apply block 2");
+
+        assert!(!mempool.contains(&spend_tx.txid()));
+    }
+
+    #[test]
+    fn reintroduces_reorged_transactions_in_dependency_order() {
+        let params = ChainParams::default();
+        let dir = tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let genesis = build_block([0u8; 32], 0, &params);
+        let mut chain = ChainState::bootstrap(params.clone(), store, genesis).expect("bootstrap");
+
+        let mempool = Arc::new(TxPool::new(TxPoolConfig::default()));
+        chain.attach_mempool(Arc::clone(&mempool));
+
+        let base_time = 2_000 + params.target_spacing;
+        let coin_material = KeyMaterial::random();
+        let coin_spend = coin_material.derive_spend_keypair(0);
+        let block1 = mine_active_block(
+            &chain,
+            &params,
+            vec![coinbase_with_material(&coin_material, base_time)],
+            base_time,
+        );
+        chain.apply_block(block1.clone()).expect("apply block 1");
+
+        let parent_material = KeyMaterial::random();
+        let parent_spend = parent_material.derive_spend_keypair(0);
+        let parent_output = Output::new(
+            build_stealth_blob(
+                &parent_material.derive_scan_keypair(0).public,
+                &parent_spend.public,
+                b"parent",
+            ),
+            crypto::commitment(25, b"parent"),
+            OutputMeta::default(),
+        );
+        let parent_witness = Witness {
+            range_proofs: Vec::new(),
+            stamp: base_time + 1,
+            extra: (6_000u64).to_le_bytes().to_vec(),
+        };
+        let parent_binding = binding_hash(&[parent_output.clone()], &parent_witness);
+        let parent_input = build_signed_input(
+            *block1.txs[0].txid().as_bytes(),
+            0,
+            &coin_spend,
+            vec![4, 5],
+            &parent_binding,
+        );
+        let parent_tx = TxBuilder::new()
+            .add_input(parent_input)
+            .add_output(parent_output.clone())
+            .set_witness(parent_witness)
+            .build();
+
+        let coinbase2_material = KeyMaterial::random();
+        let coinbase2 =
+            coinbase_with_material(&coinbase2_material, base_time + params.target_spacing);
+        let block2_time = chain.tip().header.time + params.target_spacing;
+        let block2 = mine_active_block(
+            &chain,
+            &params,
+            vec![coinbase2.clone(), parent_tx.clone()],
+            block2_time,
+        );
+        chain.apply_block(block2).expect("apply block 2");
+
+        let child_material = KeyMaterial::random();
+        let child_spend = child_material.derive_spend_keypair(0);
+        let child_output = Output::new(
+            build_stealth_blob(
+                &child_material.derive_scan_keypair(0).public,
+                &child_spend.public,
+                b"child",
+            ),
+            crypto::commitment(10, b"child"),
+            OutputMeta::default(),
+        );
+        let child_witness = Witness {
+            range_proofs: Vec::new(),
+            stamp: base_time + 2,
+            extra: (4_000u64).to_le_bytes().to_vec(),
+        };
+        let child_binding = binding_hash(&[child_output.clone()], &child_witness);
+        let child_input = build_signed_input(
+            *parent_tx.txid().as_bytes(),
+            0,
+            &parent_spend,
+            vec![6, 7],
+            &child_binding,
+        );
+        let child_tx = TxBuilder::new()
+            .add_input(child_input)
+            .add_output(child_output)
+            .set_witness(child_witness)
+            .build();
+
+        let coinbase3_material = KeyMaterial::random();
+        let coinbase3 =
+            coinbase_with_material(&coinbase3_material, base_time + 2 * params.target_spacing);
+        let block3_time = chain.tip().header.time + params.target_spacing;
+        let block3 = mine_active_block(
+            &chain,
+            &params,
+            vec![coinbase3.clone(), child_tx.clone()],
+            block3_time,
+        );
+        let n_bits = block3.header.n_bits;
+        chain.apply_block(block3).expect("apply block 3");
+
+        let alt_time2 = block3_time + 10;
+        let alt_coinbase2 = coinbase_with_material(&KeyMaterial::random(), alt_time2);
+        let block2_alt = mine_block_from(&block1, &params, n_bits, alt_time2, vec![alt_coinbase2]);
+        chain
+            .apply_block(block2_alt.clone())
+            .expect("apply alt block 2");
+
+        let alt_time3 = alt_time2 + params.target_spacing;
+        let alt_coinbase3 = coinbase_with_material(&KeyMaterial::random(), alt_time3);
+        let block3_alt =
+            mine_block_from(&block2_alt, &params, n_bits, alt_time3, vec![alt_coinbase3]);
+        chain
+            .apply_block(block3_alt.clone())
+            .expect("apply alt block 3");
+
+        let alt_time4 = alt_time3 + params.target_spacing;
+        let alt_coinbase4 = coinbase_with_material(&KeyMaterial::random(), alt_time4);
+        let block4_alt =
+            mine_block_from(&block3_alt, &params, n_bits, alt_time4, vec![alt_coinbase4]);
+        chain.apply_block(block4_alt).expect("apply alt block 4");
+
+        assert!(mempool.contains(&parent_tx.txid()));
+        assert!(mempool.contains(&child_tx.txid()));
+        let stats = mempool.stats();
+        assert_eq!(stats.tx_count, 2);
+        assert_eq!(stats.orphan_count, 0);
+    }
+
     fn build_block(prev_hash: [u8; 32], seed: u64, params: &ChainParams) -> Block {
         let tx = coinbase(seed);
         let txs = vec![tx.clone()];
@@ -793,6 +1144,52 @@ mod tests {
         let n_bits = chain.next_difficulty_bits().unwrap_or(prev.header.n_bits);
         let tx = coinbase(time);
         let txs = vec![tx.clone()];
+        let header = BlockHeader {
+            version: 1,
+            prev_hash: pow_hash(&prev.header),
+            merkle_root: consensus::merkle_root(&txs),
+            utxo_root: [0u8; 32],
+            time,
+            n_bits,
+            nonce: 0,
+            alg_tag: 1,
+        };
+        mine_block(header, txs, &params.pow_limit)
+    }
+
+    fn coinbase_with_material(material: &KeyMaterial, stamp: u64) -> tx::Tx {
+        let scan = material.derive_scan_keypair(0);
+        let spend = material.derive_spend_keypair(0);
+        let stealth = build_stealth_blob(&scan.public, &spend.public, &stamp.to_le_bytes());
+        let commitment = crypto::commitment(50, &stamp.to_le_bytes());
+        TxBuilder::new()
+            .add_output(Output::new(stealth, commitment, OutputMeta::default()))
+            .set_witness(Witness {
+                range_proofs: Vec::new(),
+                stamp,
+                extra: Vec::new(),
+            })
+            .build()
+    }
+
+    fn mine_active_block(
+        chain: &ChainState,
+        params: &ChainParams,
+        txs: Vec<tx::Tx>,
+        time: u64,
+    ) -> Block {
+        let prev = chain.tip();
+        let n_bits = chain.next_difficulty_bits().unwrap_or(prev.header.n_bits);
+        mine_block_from(prev, params, n_bits, time, txs)
+    }
+
+    fn mine_block_from(
+        prev: &Block,
+        params: &ChainParams,
+        n_bits: u32,
+        time: u64,
+        txs: Vec<tx::Tx>,
+    ) -> Block {
         let header = BlockHeader {
             version: 1,
             prev_hash: pow_hash(&prev.header),
