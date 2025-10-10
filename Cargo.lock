@@ -459,7 +459,7 @@ dependencies = [
  "num-bigint",
  "num-traits",
  "serde",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "tx",
 ]
 
@@ -509,7 +509,7 @@ dependencies = [
  "serde",
  "serde_bytes",
  "sha3",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -1336,7 +1336,7 @@ dependencies = [
  "serde_json",
  "storage",
  "tempfile",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "tokio",
  "toml",
  "tracing",
@@ -2152,7 +2152,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "tx",
  "utxo",
 ]
@@ -2517,7 +2517,7 @@ dependencies = [
  "serde",
  "serde_bytes",
  "serde_with",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -2571,7 +2571,7 @@ dependencies = [
  "crypto",
  "rand 0.8.5",
  "serde",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "tx",
 ]
 
@@ -2602,7 +2602,7 @@ dependencies = [
  "hex",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "tracing",
  "tracing-subscriber",
  "tx",
