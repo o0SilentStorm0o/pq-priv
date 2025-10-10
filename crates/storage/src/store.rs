@@ -135,7 +135,7 @@ impl Store {
     pub fn header_by_height(&self, height: u64) -> Result<Option<BlockHeader>, StorageError> {
         let cf = self.cf(Column::Headers)?;
         let key = header_key(height);
-        let value = match self.db.get_cf(cf, &key)? {
+        let value = match self.db.get_cf(cf, key)? {
             Some(data) => data,
             None => return Ok(None),
         };
@@ -146,7 +146,7 @@ impl Store {
     pub fn block_by_hash(&self, hash: &[u8; 32]) -> Result<Option<Block>, StorageError> {
         let cf = self.cf(Column::Blocks)?;
         let key = block_key(hash);
-        let value = match self.db.get_cf(cf, &key)? {
+        let value = match self.db.get_cf(cf, key)? {
             Some(data) => data,
             None => return Ok(None),
         };
@@ -241,7 +241,7 @@ impl Store {
         let bytes = encode_height(value);
         let mut opts = WriteOptions::default();
         opts.disable_wal(false);
-        self.db.put_cf_opt(cf_meta, &key, &bytes, &opts)?;
+        self.db.put_cf_opt(cf_meta, &key, bytes, &opts)?;
         Ok(())
     }
 
@@ -294,7 +294,7 @@ impl Store {
             let mut opts = WriteOptions::default();
             opts.disable_wal(false);
             self.db
-                .put_cf_opt(cf_meta, &version_key, &SCHEMA_VERSION.to_be_bytes(), &opts)?;
+                .put_cf_opt(cf_meta, &version_key, SCHEMA_VERSION.to_be_bytes(), &opts)?;
         }
         let compact_key = meta_key(META_COMPACT_INDEX);
         if self.db.get_cf(cf_meta, &compact_key)?.is_none() {

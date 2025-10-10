@@ -27,6 +27,10 @@ impl Relay {
         network: NetworkHandle,
         sync: Arc<SyncManager>,
     ) -> Self {
+        {
+            let mut guard = chain.lock();
+            guard.attach_mempool(Arc::clone(&mempool));
+        }
         Self {
             mempool,
             chain,
@@ -73,6 +77,23 @@ impl Relay {
                 let _ = self.network.send(peer_id, NetMessage::GetData(filtered));
             }
         }
+    }
+
+    pub fn handle_headers(&self, peer_id: PeerId, headers: Vec<BlockHeader>) {
+        if headers.is_empty() {
+            return;
+        }
+        let requests = {
+            let chain = self.chain.lock();
+            self.sync.register_headers(&headers, &chain)
+        };
+        if requests.is_empty() {
+            return;
+        }
+        let items = requests.into_iter().map(InventoryItem::block).collect();
+        let _ = self
+            .network
+            .send(peer_id, NetMessage::GetData(Inventory { items }));
     }
 
     pub fn handle_get_data(&self, peer_id: PeerId, inventory: Inventory) {
@@ -154,6 +175,10 @@ impl Relay {
         let item = InventoryItem::tx(*txid.as_bytes());
         self.network
             .broadcast_except(NetMessage::Inv(Inventory::single(item)), skip);
+    }
+
+    pub fn network(&self) -> NetworkHandle {
+        self.network.clone()
     }
 
     fn admit_transaction(&self, tx: Tx, bytes: Vec<u8>) -> Result<TxId, MempoolRejection> {

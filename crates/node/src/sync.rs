@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
-use consensus::{Block, pow_hash};
+use consensus::{Block, BlockHeader, pow_hash};
 use p2p::{InvType, Inventory};
 use parking_lot::Mutex;
 
@@ -48,6 +48,24 @@ impl SyncManager {
 
     pub fn mark_known(&self, hash: [u8; 32]) {
         self.state.lock().known.insert(hash);
+    }
+
+    pub fn register_headers(&self, headers: &[BlockHeader], chain: &ChainState) -> Vec<[u8; 32]> {
+        let mut guard = self.state.lock();
+        purge_expired_orphans(&mut guard, self.orphan_ttl);
+        let mut requests = Vec::new();
+        for header in headers {
+            let hash = pow_hash(header);
+            if chain.has_block(&hash) {
+                guard.pending.remove(&hash);
+                guard.known.insert(hash);
+                continue;
+            }
+            if guard.pending.insert(hash) {
+                requests.push(hash);
+            }
+        }
+        requests
     }
 
     pub fn filter_inventory(&self, inventory: &Inventory) -> Inventory {
@@ -131,6 +149,19 @@ impl SyncManager {
     }
 }
 
+fn detach_child(
+    children: &mut HashMap<[u8; 32], Vec<[u8; 32]>>,
+    parent: [u8; 32],
+    child: [u8; 32],
+) {
+    if let Some(entries) = children.get_mut(&parent) {
+        entries.retain(|hash| *hash != child);
+        if entries.is_empty() {
+            children.remove(&parent);
+        }
+    }
+}
+
 fn purge_expired_orphans(state: &mut SyncState, ttl: Duration) {
     let now = Instant::now();
     let mut expired = Vec::new();
@@ -141,34 +172,22 @@ fn purge_expired_orphans(state: &mut SyncState, ttl: Duration) {
     }
     for hash in expired {
         if let Some(orphan) = state.orphans.remove(&hash) {
-            if let Some(children) = state.children.get_mut(&orphan.block.header.prev_hash) {
-                children.retain(|child| *child != hash);
-                if children.is_empty() {
-                    state.children.remove(&orphan.block.header.prev_hash);
-                }
-            }
+            detach_child(&mut state.children, orphan.block.header.prev_hash, hash);
         }
     }
 }
 
 fn insert_orphan(state: &mut SyncState, limit: usize, orphan: OrphanBlock) {
     let hash = pow_hash(&orphan.block.header);
-    if state.orphans.len() >= limit {
-        if let Some((old_hash, _)) = state
+    if state.orphans.len() >= limit
+        && let Some((old_hash, old)) = state
             .orphans
             .iter()
             .min_by_key(|(_, block)| block.received_at)
-            .map(|(hash, block)| (*hash, block.received_at))
-        {
-            if let Some(old) = state.orphans.remove(&old_hash) {
-                if let Some(children) = state.children.get_mut(&old.block.header.prev_hash) {
-                    children.retain(|child| *child != old_hash);
-                    if children.is_empty() {
-                        state.children.remove(&old.block.header.prev_hash);
-                    }
-                }
-            }
-        }
+            .map(|(hash, _)| *hash)
+            .and_then(|hash| state.orphans.remove(&hash).map(|old| (hash, old)))
+    {
+        detach_child(&mut state.children, old.block.header.prev_hash, old_hash);
     }
     state
         .children
@@ -252,6 +271,29 @@ mod tests {
             alg_tag: 1,
         };
         mine_block(header, txs, &params.pow_limit)
+    }
+
+    #[test]
+    fn register_headers_marks_unknown_blocks_for_download() {
+        let params = ChainParams::default();
+        let dir = tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let genesis = build_block([0u8; 32], 0, 0x207fffff, &params);
+        let mut chain = ChainState::bootstrap(params.clone(), store, genesis.clone()).unwrap();
+        let manager = SyncManager::new(8, Duration::from_secs(60));
+        manager.mark_known(pow_hash(&genesis.header));
+
+        let next = mine_child_block(&chain, &params, 1_000);
+        let header = next.header.clone();
+        let hash = pow_hash(&header);
+
+        assert!(!chain.has_block(&hash));
+        let requests = manager.register_headers(std::slice::from_ref(&header), &chain);
+        assert_eq!(requests, vec![hash]);
+
+        manager.process_block(next, &mut chain).unwrap();
+        let requests_after = manager.register_headers(std::slice::from_ref(&header), &chain);
+        assert!(requests_after.is_empty());
     }
 
     #[test]
