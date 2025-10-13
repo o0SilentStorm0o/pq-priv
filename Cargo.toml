@@ -17,3 +17,9 @@ resolver = "2"
 edition = "2024"
 rust-version = "1.90"
 license = "Apache-2.0 OR MIT"
+
+# Development patch: rocksdb_stub provides faster compilation during development.
+# This is a simplified in-memory implementation suitable for testing and rapid iteration.
+# For production builds, remove this patch to use the full RocksDB implementation.
+[patch.crates-io]
+rocksdb = { path = "crates/rocksdb_stub" }

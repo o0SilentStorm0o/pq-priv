@@ -17,14 +17,17 @@
 | `crates/consensus`| Block/chain rules, PoW utilities, validation scaffolding |
 | `crates/crypto`   | PQ primitives (Dilithium scaffolding, commitments, hashing) |
 | `crates/node`     | Full node daemon: async runtime, P2P/RPC services, sync orchestration |
+| `crates/p2p`      | P2P networking: peer management, handshake, inventory system |
 | `crates/pow`      | Proof-of-Work target/retarget helpers |
+| `crates/rocksdb_stub` | Development stub for RocksDB (fast compilation, no persistence) |
 | `crates/spec`     | Shared protocol constants/types |
+| `crates/storage`  | RocksDB persistence layer with checkpoint support |
 | `crates/tx`       | Transaction model, builder, canonical txid/sighash |
 | `crates/utxo`     | In-memory ledger, double-spend detection, integration tests |
 | `crates/wallet`   | CLI wallet prototype (key management, audit stubs) |
 | `spec/`           | RFC-style protocol & operations documentation |
 | `docker/`         | Multi-stage Dockerfile for reproducible builds |
-| `scripts/`        | Utility scripts (testnet, checksum writer) |
+| `scripts/`        | Utility scripts (PowerShell/bash testnet, checksum writer) |
 
 ---
 
@@ -68,27 +71,45 @@ make test
 make audit
 ```
 
-* Všechny buildy a testy spouštějte s `--locked` (Makefile to již nastavuje).
-* Linty a testy běží automaticky v GitHub Actions (`.github/workflows/ci.yml`).
-* Pro rychlý lokální testnet spusťte `make testnet-up` (ukončení `make testnet-down`).
+* All builds and tests run with `--locked` (Makefile sets this by default)
+* Lints and tests run automatically in GitHub Actions (`.github/workflows/ci.yml`)
+* For a quick local testnet, run the PowerShell script (Windows) or bash script (Linux/macOS)
 
-```bash
-BLOCKS=256 make testnet-up
-tail -f .testnet/node.log
+### Local Testnet (Windows)
+
+```powershell
+# PowerShell 7+ required
+.\scripts\testnet-up.ps1
 ```
 
-## Docker image
+The script:
+- Builds the node with `devnet` feature (enables `/dev/mine` endpoint)
+- Generates configuration in `.testnet/node.toml`
+- Starts the node with automatic port allocation
+- Runs 12 comprehensive integration tests:
+  - Health checks, genesis verification, mining (6 blocks)
+  - Metrics validation, snapshot creation, restart persistence
+  - Database integrity, error handling
+- Cleans up: stops node, removes test database
 
-```bash
-make docker-build
-docker run --rm pqpriv:dev --help
-```
-
-For a two-node sandbox with persistent volumes and health-checked RPC services:
+### Docker Multi-Node Testnet
 
 ```bash
 make docker-build
 docker compose -f docker/docker-compose.yml up
+```
+
+This starts:
+- **node_a**: RPC on `:8645`, P2P on `:8644`
+- **node_b**: RPC on `:8745`, P2P on `:8744`
+- Health checks every 15 seconds
+- Persistent volumes for blockchain data and snapshots
+
+Test the nodes:
+```bash
+curl http://localhost:8645/health      # node_a
+curl http://localhost:8745/health      # node_b
+curl http://localhost:8645/chain/tip   # genesis block
 ```
 
 ## Dokumentace

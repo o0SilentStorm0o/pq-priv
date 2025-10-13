@@ -36,10 +36,18 @@ docker-build:
 	$(DOCKER) build -f docker/Dockerfile -t pqpriv:dev .
 
 testnet-up:
-	CARGO="$(CARGO)" bash scripts/testnet-up.sh
+ifeq ($(OS),Windows_NT)
+	@powershell.exe -ExecutionPolicy Bypass -File scripts/testnet-up.ps1
+else
+	@bash scripts/testnet-up.sh
+endif
 
 testnet-down:
-	bash scripts/testnet-down.sh
+ifeq ($(OS),Windows_NT)
+	@powershell.exe -ExecutionPolicy Bypass -File scripts/testnet-down.ps1
+else
+	@bash scripts/testnet-down.sh
+endif
 
 e2e-up:
 	$(DOCKER) compose -f docker/docker-compose.yml up -d

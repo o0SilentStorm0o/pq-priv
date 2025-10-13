@@ -434,7 +434,7 @@ mod tests {
 
         let spend_output = Output::new(vec![9], [11u8; 32], OutputMeta::default());
         let witness = Witness::default();
-        let binding = binding_hash(&[spend_output.clone()], &witness);
+        let binding = binding_hash(std::slice::from_ref(&spend_output), &witness);
         let spend_input = build_signed_input(
             *coinbase_tx.txid().as_bytes(),
             0,
