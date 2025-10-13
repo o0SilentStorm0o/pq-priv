@@ -21,6 +21,7 @@ use parking_lot::Mutex;
 use tx::{Tx, TxId};
 
 use crate::mempool::{MempoolAddOutcome, MempoolRejection, TxPool, TxPoolStats};
+use crate::metrics::StorageMetrics;
 use crate::state::{ChainMetrics, ChainState};
 use p2p::NetworkHandle;
 
@@ -29,6 +30,7 @@ pub struct RpcContext {
     mempool: Arc<Mutex<TxPool>>,
     chain: Arc<Mutex<ChainState>>,
     network: Arc<Mutex<NetworkHandle>>,
+    storage_metrics: StorageMetrics,
 }
 
 impl RpcContext {
@@ -41,7 +43,12 @@ impl RpcContext {
             mempool,
             chain,
             network: Arc::new(Mutex::new(network)),
+            storage_metrics: StorageMetrics::new(),
         }
+    }
+
+    pub fn storage_metrics(&self) -> &StorageMetrics {
+        &self.storage_metrics
     }
 
     fn chain_snapshot(&self) -> ChainSnapshot {
@@ -106,6 +113,10 @@ impl RpcContext {
             "pqpriv_batch_commit_ms {:.3}",
             snapshot.chain.last_commit_ms
         );
+        
+        // Storage metrics from RocksDB
+        body.push_str(&self.storage_metrics.to_prometheus());
+        
         body
     }
 
