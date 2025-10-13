@@ -8,11 +8,13 @@ use codec::from_slice_cbor;
 use consensus::{Block, BlockHeader, block_work, pow_hash};
 use rocksdb::checkpoint::Checkpoint;
 use rocksdb::{
-    ColumnFamily, ColumnFamilyDescriptor, DB, IteratorMode, Options, WriteBatch, WriteOptions,
+    BlockBasedOptions, Cache, ColumnFamily, ColumnFamilyDescriptor, DB, DBCompressionType,
+    IteratorMode, Options, WriteBatch, WriteOptions,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::batch::BlockBatch;
+use crate::config::DbTuning;
 use crate::errors::StorageError;
 use crate::schema::{
     self, Column, META_COMPACT_INDEX, META_TIP, block_key, decode_height, encode_height,
@@ -76,17 +78,80 @@ pub struct Store {
 }
 
 impl Store {
-    pub fn open(path: impl AsRef<Path>) -> Result<Self, StorageError> {
+    /// Build RocksDB options from tuning configuration.
+    fn build_db_options(tuning: &DbTuning) -> (Options, BlockBasedOptions) {
         let mut opts = Options::default();
         opts.create_if_missing(true);
         opts.create_missing_column_families(true);
+
+        // Parallelism
+        opts.increase_parallelism(tuning.max_background_jobs());
+
+        // Compaction
+        opts.set_level_compaction_dynamic_level_bytes(tuning.compaction_dynamic());
+        opts.set_target_file_size_base(tuning.target_file_size_mb() * 1024 * 1024);
+
+        // Write buffer
+        opts.set_write_buffer_size((tuning.write_buffer_mb() as usize) * 1024 * 1024);
+
+        // Sync settings
+        opts.set_bytes_per_sync(tuning.bytes_per_sync_mb() * 1024 * 1024);
+        opts.set_wal_bytes_per_sync(tuning.wal_bytes_per_sync_mb() * 1024 * 1024);
+
+        // Compression
+        match tuning.compression() {
+            "lz4" => opts.set_compression_type(DBCompressionType::Lz4),
+            "zstd" => opts.set_compression_type(DBCompressionType::Zstd),
+            "none" => opts.set_compression_type(DBCompressionType::None),
+            _ => opts.set_compression_type(DBCompressionType::Zstd),
+        }
+
+        // Pipelined writes
+        if tuning.enable_pipelined_write() {
+            opts.enable_pipelined_write(true);
+        }
+
+        // Read-ahead
+        if tuning.readahead_mb() > 0 {
+            opts.set_advise_random_on_open(false);
+            opts.set_allow_concurrent_memtable_write(true);
+            opts.set_compaction_readahead_size(tuning.readahead_mb() * 1024 * 1024);
+        }
+
+        // Block-based table options
+        let mut block_opts = BlockBasedOptions::default();
+        if tuning.block_cache_mb() > 0 {
+            let cache = Cache::new_lru_cache((tuning.block_cache_mb() as usize) * 1024 * 1024);
+            block_opts.set_block_cache(&cache);
+        }
+        block_opts.set_bloom_filter(10.0, false);
+
+        (opts, block_opts)
+    }
+
+    /// Open database with default tuning.
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, StorageError> {
+        let tuning = DbTuning::default().from_env();
+        Self::open_with_tuning(path, tuning)
+    }
+
+    /// Open database with custom tuning parameters.
+    pub fn open_with_tuning(
+        path: impl AsRef<Path>,
+        tuning: DbTuning,
+    ) -> Result<Self, StorageError> {
+        let (mut opts, block_opts) = Self::build_db_options(&tuning);
+        
+        opts.set_block_based_table_factory(&block_opts);
+
         let cf_descriptors = vec![
-            ColumnFamilyDescriptor::new(schema::CF_HEADERS, Options::default()),
-            ColumnFamilyDescriptor::new(schema::CF_BLOCKS, Options::default()),
-            ColumnFamilyDescriptor::new(schema::CF_UTXO, Options::default()),
-            ColumnFamilyDescriptor::new(schema::CF_LINKTAG, Options::default()),
-            ColumnFamilyDescriptor::new(schema::CF_META, Options::default()),
+            ColumnFamilyDescriptor::new(schema::CF_HEADERS, opts.clone()),
+            ColumnFamilyDescriptor::new(schema::CF_BLOCKS, opts.clone()),
+            ColumnFamilyDescriptor::new(schema::CF_UTXO, opts.clone()),
+            ColumnFamilyDescriptor::new(schema::CF_LINKTAG, opts.clone()),
+            ColumnFamilyDescriptor::new(schema::CF_META, opts.clone()),
         ];
+        
         let db = DB::open_cf_descriptors(&opts, path, cf_descriptors)?;
         let store = Self { db: Arc::new(db) };
         store.ensure_bootstrap()?;
