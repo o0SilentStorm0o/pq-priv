@@ -1,1 +1,7 @@
 target/
+.testnet/
+.pqpriv/
+*.exe
+*.dll
+*.so
+*.dylib

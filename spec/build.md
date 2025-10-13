@@ -50,7 +50,7 @@ docker run --rm pqpriv:dev --help
 
 ## Testnet skripty
 
-* `scripts/testnet-up.sh` spouští lokální mining smyčku (`node run --blocks N`).
+* `scripts/testnet-up.sh` launches a local testnet (`node run`) using a generated config under `.testnet/`, exercises the RPC health/chain endpoints, mines a dev block, a následně ověřuje persistenci po restartu.
 * `scripts/testnet-down.sh` bezpečně ukončí běžící procesy `target/release/node`.
 
 ## Release checklist

@@ -14,7 +14,7 @@ use parking_lot::Mutex;
 
 #[derive(Clone)]
 pub struct Relay {
-    mempool: Arc<TxPool>,
+    mempool: Arc<Mutex<TxPool>>,
     chain: Arc<Mutex<ChainState>>,
     network: NetworkHandle,
     sync: Arc<SyncManager>,
@@ -22,7 +22,7 @@ pub struct Relay {
 
 impl Relay {
     pub fn new(
-        mempool: Arc<TxPool>,
+        mempool: Arc<Mutex<TxPool>>,
         chain: Arc<Mutex<ChainState>>,
         network: NetworkHandle,
         sync: Arc<SyncManager>,
@@ -48,7 +48,7 @@ impl Relay {
                 match item.kind {
                     InvType::Transaction => {
                         let txid = TxId(item.hash);
-                        if !self.mempool.contains(&txid) {
+                        if !self.mempool.lock().contains(&txid) {
                             tx_requests.push(InventoryItem::tx(*txid.as_bytes()));
                         }
                     }
@@ -101,7 +101,7 @@ impl Relay {
             match item.kind {
                 InvType::Transaction => {
                     let txid = TxId(item.hash);
-                    if let Some(bytes) = self.mempool.get_bytes(&txid) {
+                    if let Some(bytes) = self.mempool.lock().get_bytes(&txid) {
                         let _ = self.network.send(peer_id, NetMessage::Tx(bytes));
                     }
                 }
@@ -185,6 +185,7 @@ impl Relay {
         let txid = tx.txid();
         let outcome = self
             .mempool
+            .lock()
             .accept_transaction(tx, Some(bytes), |txid, index| {
                 let chain = self.chain.lock();
                 chain.has_utxo(txid, index)

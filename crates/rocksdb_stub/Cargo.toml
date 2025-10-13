@@ -1,0 +1,18 @@
+[package]
+name = "rocksdb"
+version = "0.21.0"
+edition = "2021"
+license = "Apache-2.0 OR MIT"
+
+[lib]
+name = "rocksdb"
+path = "src/lib.rs"
+
+[features]
+default = []
+lz4 = []
+snappy = []
+zstd = []
+bzip2 = []
+zlib = []
+

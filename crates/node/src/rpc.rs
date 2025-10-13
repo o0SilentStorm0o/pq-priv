@@ -26,21 +26,21 @@ use p2p::NetworkHandle;
 
 #[derive(Clone)]
 pub struct RpcContext {
-    mempool: Arc<TxPool>,
+    mempool: Arc<Mutex<TxPool>>,
     chain: Arc<Mutex<ChainState>>,
-    network: NetworkHandle,
+    network: Arc<Mutex<NetworkHandle>>,
 }
 
 impl RpcContext {
     pub fn new(
-        mempool: Arc<TxPool>,
+        mempool: Arc<Mutex<TxPool>>,
         chain: Arc<Mutex<ChainState>>,
         network: NetworkHandle,
     ) -> Self {
         Self {
             mempool,
             chain,
-            network,
+            network: Arc::new(Mutex::new(network)),
         }
     }
 
@@ -53,7 +53,7 @@ impl RpcContext {
     }
 
     fn peers(&self) -> Vec<PeerSummary> {
-        self.network.peer_info()
+        self.network.lock().peer_info()
     }
 
     fn metrics_snapshot(&self) -> MetricsSnapshot {
@@ -63,8 +63,8 @@ impl RpcContext {
         };
         MetricsSnapshot {
             chain: chain_metrics,
-            mempool: self.mempool.stats(),
-            peer_count: self.network.peer_info().len(),
+            mempool: self.mempool.lock().stats(),
+            peer_count: self.peers().len(),
             running_compactions: db_stats.running_compactions,
         }
     }
@@ -113,6 +113,7 @@ impl RpcContext {
         let candidate_txid = tx.txid();
         let outcome = self
             .mempool
+            .lock()
             .accept_transaction(tx, Some(bytes), |txid, index| {
                 let guard = self.chain.lock();
                 guard.has_utxo(txid, index)
@@ -141,6 +142,7 @@ impl RpcContext {
     fn broadcast_inv(&self, txid: TxId) {
         let item = InventoryItem::tx(*txid.as_bytes());
         self.network
+            .lock()
             .broadcast(NetMessage::Inv(Inventory::single(item)));
     }
 }
@@ -191,21 +193,121 @@ impl RpcError {
 }
 
 pub async fn spawn_rpc_server(
-    ctx: RpcContext,
+    ctx: Arc<RpcContext>,
     listen: SocketAddr,
-) -> Result<JoinHandle<()>, anyhow::Error> {
+) -> Result<(JoinHandle<()>, SocketAddr), anyhow::Error> {
     let router = Router::new()
         .route("/", post(handle_rpc))
         .route("/metrics", get(handle_metrics))
-        .with_state(Arc::new(ctx));
+        .route("/health", get(handle_health))
+        .route("/chain/tip", get(handle_chain_tip));
+
+    #[cfg(feature = "devnet")]
+    let router = router.route("/dev/mine", post(handle_dev_mine));
+
+    let router = router.with_state(ctx);
     let listener = tokio::net::TcpListener::bind(listen).await?;
-    info!(%listen, "rpc listening");
+    let actual_addr = listener.local_addr()?;
+    info!(addr = %actual_addr, "rpc listening");
     let handle = tokio::spawn(async move {
         if let Err(err) = axum::serve(listener, router).await {
             tracing::error!(error = ?err, "rpc server terminated");
         }
     });
-    Ok(handle)
+    Ok((handle, actual_addr))
+}
+
+async fn handle_health(State(_ctx): State<Arc<RpcContext>>) -> impl IntoResponse {
+    Json(json!({
+        "status": "ok"
+    }))
+}
+
+async fn handle_chain_tip(State(ctx): State<Arc<RpcContext>>) -> impl IntoResponse {
+    let snapshot = ctx.chain_snapshot();
+    Json(json!({
+        "height": snapshot.height,
+        "hash": hex::encode(snapshot.best_hash)
+    }))
+}
+
+#[cfg(feature = "devnet")]
+async fn handle_dev_mine(State(ctx): State<Arc<RpcContext>>) -> impl IntoResponse {
+    use consensus::{BlockHeader, merkle_root, pow_hash};
+    use pow::mine_block;
+
+    let (params, prev_hash, height, n_bits) = {
+        let guard = ctx.chain.lock();
+        let tip = guard.tip();
+        let next_bits = guard.next_difficulty_bits().unwrap_or(tip.header.n_bits);
+        (
+            guard.params().clone(),
+            pow_hash(&tip.header),
+            guard.height() + 1,
+            next_bits,
+        )
+    };
+
+    let material = crypto::KeyMaterial::random();
+    let tx = build_coinbase_tx(&material, height);
+    let txs = vec![tx];
+
+    let header = BlockHeader {
+        version: 1,
+        prev_hash,
+        merkle_root: merkle_root(&txs),
+        utxo_root: [0u8; 32],
+        time: current_time() + height, // Ensure time advances for each block
+        n_bits,
+        nonce: 0,
+        alg_tag: 1,
+    };
+
+    let block = mine_block(header, txs, &params.pow_limit);
+
+    let result = {
+        let mut guard = ctx.chain.lock();
+        guard.apply_block(block)
+    };
+
+    match result {
+        Ok(_) => Json(json!({
+            "height": height,
+            "status": "mined"
+        })),
+        Err(err) => Json(json!({
+            "error": format!("{}", err)
+        })),
+    }
+}
+
+#[cfg(feature = "devnet")]
+fn build_coinbase_tx(material: &crypto::KeyMaterial, height: u64) -> tx::Tx {
+    use tx::{Output, OutputMeta, TxBuilder, Witness, build_stealth_blob};
+
+    let scan = material.derive_scan_keypair(0);
+    let spend = material.derive_spend_keypair(0);
+    let stealth = build_stealth_blob(&scan.public, &spend.public, &height.to_le_bytes());
+    let commitment = crypto::commitment(50, &height.to_le_bytes());
+    let output = Output::new(stealth, commitment, OutputMeta::default());
+
+    TxBuilder::new()
+        .add_output(output)
+        .set_witness(Witness {
+            range_proofs: Vec::new(),
+            stamp: current_time(),
+            extra: Vec::new(),
+        })
+        .build()
+}
+
+#[cfg(feature = "devnet")]
+fn current_time() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 async fn handle_metrics(State(ctx): State<Arc<RpcContext>>) -> String {
@@ -233,6 +335,7 @@ async fn handle_rpc(
         "getrawmempool" => {
             let txids = ctx
                 .mempool
+                .lock()
                 .txids()
                 .into_iter()
                 .map(|id| id.to_string())
@@ -278,7 +381,7 @@ async fn handle_rpc(
             success(request.id, json!(peers))
         }
         "getnetworkinfo" => {
-            let version = ctx.network.local_version();
+            let version = ctx.network.lock().local_version();
             let peers = ctx.peers();
             let target_spacing = {
                 let guard = ctx.chain.lock();
@@ -424,9 +527,11 @@ mod tests {
         let genesis = build_block([0u8; 32], 0, &params);
         let chain = ChainState::bootstrap(params.clone(), store, genesis).expect("bootstrap");
         let chain = Arc::new(Mutex::new(chain));
-        let mempool = Arc::new(TxPool::new(TxPoolConfig::default()));
-        let mut config = P2pConfig::default();
-        config.listen = "127.0.0.1:0".parse().unwrap();
+        let mempool = Arc::new(Mutex::new(TxPool::new(TxPoolConfig::default())));
+        let config = P2pConfig {
+            listen: "127.0.0.1:0".parse().unwrap(),
+            ..Default::default()
+        };
         let version = Version::user_agent("test", 0);
         let network = start_network(config, version).await.expect("start network");
         let ctx = Arc::new(RpcContext::new(mempool, chain, network));

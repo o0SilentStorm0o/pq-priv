@@ -56,7 +56,7 @@ impl NodeOptions {
 struct TestNode {
     chain: Arc<Mutex<ChainState>>,
     sync: Arc<SyncManager>,
-    _mempool: Arc<TxPool>,
+    _mempool: Arc<Mutex<TxPool>>,
     network: NetworkHandle,
     peer_task: JoinHandle<()>,
     chain_task: JoinHandle<()>,
@@ -81,7 +81,7 @@ impl TestNode {
             .expect("configure snapshots");
 
         let chain = Arc::new(Mutex::new(chain_state));
-        let mempool = Arc::new(TxPool::new(TxPoolConfig::default()));
+        let mempool = Arc::new(Mutex::new(TxPool::new(TxPoolConfig::default())));
         let sync = Arc::new(SyncManager::new(4_096, Duration::from_secs(120)));
 
         {
@@ -89,10 +89,12 @@ impl TestNode {
             sync.mark_known(pow_hash(&guard.tip().header));
         }
 
-        let mut p2p_config = P2pConfig::default();
-        p2p_config.listen = options.listen;
-        p2p_config.seeds = options.seeds.clone();
-        p2p_config.outbound_queue = 8_192;
+        let p2p_config = P2pConfig {
+            listen: options.listen,
+            seeds: options.seeds.clone(),
+            outbound_queue: 8_192,
+            ..Default::default()
+        };
 
         let (height, listen_addr) = {
             let guard = chain.lock();
@@ -118,8 +120,15 @@ impl TestNode {
         );
 
         let rpc_task = if let Some(addr) = options.rpc {
-            let ctx = RpcContext::new(Arc::clone(&mempool), Arc::clone(&chain), network.clone());
-            Some(spawn_rpc_server(ctx, addr).await.expect("spawn rpc"))
+            let ctx = Arc::new(RpcContext::new(
+                Arc::clone(&mempool),
+                Arc::clone(&chain),
+                network.clone(),
+            ));
+            let (handle, _) = spawn_rpc_server(Arc::clone(&ctx), addr)
+                .await
+                .expect("spawn rpc");
+            Some(handle)
         } else {
             None
         };
@@ -477,13 +486,12 @@ async fn exposes_metrics_over_http() {
     let url = format!("http://{}/metrics", rpc_addr);
     let mut success = false;
     for _ in 0..50 {
-        if let Ok(response) = client.get(&url).send().await {
-            if let Ok(body) = response.text().await {
-                if body.contains("pqpriv_tip_height 0") {
-                    success = true;
-                    break;
-                }
-            }
+        if let Ok(response) = client.get(&url).send().await
+            && let Ok(body) = response.text().await
+            && body.contains("pqpriv_tip_height 0")
+        {
+            success = true;
+            break;
         }
         tokio::time::sleep(POLL_INTERVAL).await;
     }
@@ -500,13 +508,12 @@ async fn exposes_metrics_over_http() {
 
     let mut updated = false;
     for _ in 0..50 {
-        if let Ok(response) = client.get(&url).send().await {
-            if let Ok(body) = response.text().await {
-                if body.contains("pqpriv_tip_height 1") {
-                    updated = true;
-                    break;
-                }
-            }
+        if let Ok(response) = client.get(&url).send().await
+            && let Ok(body) = response.text().await
+            && body.contains("pqpriv_tip_height 1")
+        {
+            updated = true;
+            break;
         }
         tokio::time::sleep(POLL_INTERVAL).await;
     }
@@ -535,10 +542,12 @@ async fn rejects_peers_with_invalid_handshake() {
     )
     .await;
 
-    let mut bad_config = P2pConfig::default();
-    bad_config.listen = random_listen();
-    bad_config.seeds = vec![listen_a];
-    bad_config.handshake_key = [0xAA; 32];
+    let bad_config = P2pConfig {
+        listen: random_listen(),
+        seeds: vec![listen_a],
+        handshake_key: [0xAA; 32],
+        ..Default::default()
+    };
 
     let mut version = Version::user_agent("malicious", 0);
     let advertised = NodeAddr::new(

@@ -1,7 +1,7 @@
 p2p_listen = "0.0.0.0:8644"
 rpc_listen = "0.0.0.0:8645"
-db_path = ".pqpriv/node"
-snapshots_path = ".pqpriv/snapshots"
+db_path = "/home/pqpriv/.pqpriv/node"
+snapshots_path = "/home/pqpriv/.pqpriv/snapshots"
 # Keep snapshots lightweight for local testing.
 snapshot_interval = 120
 snapshot_keep = 2

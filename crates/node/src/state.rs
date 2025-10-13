@@ -11,6 +11,7 @@ use consensus::{
 use hex::encode as hex_encode;
 use num_bigint::BigUint;
 use num_traits::{ToPrimitive, Zero};
+use parking_lot::Mutex;
 use storage::{CheckpointManager, RocksUtxoStore, SnapshotConfig, StorageError, Store, TipInfo};
 use thiserror::Error;
 use tokio::sync::broadcast;
@@ -78,7 +79,7 @@ pub struct ChainState {
     checkpoint_manager: Option<CheckpointManager>,
     last_commit_ms: f64,
     events: broadcast::Sender<ChainEvent>,
-    mempool: Option<Arc<TxPool>>,
+    mempool: Option<Arc<Mutex<TxPool>>>,
 }
 
 impl ChainState {
@@ -134,7 +135,7 @@ impl ChainState {
         self.events.subscribe()
     }
 
-    pub fn attach_mempool(&mut self, mempool: Arc<TxPool>) {
+    pub fn attach_mempool(&mut self, mempool: Arc<Mutex<TxPool>>) {
         self.mempool = Some(mempool);
     }
 
@@ -513,7 +514,7 @@ impl ChainState {
             return;
         }
         if let Some(pool) = &self.mempool {
-            pool.remove_confirmed(txids);
+            pool.lock().remove_confirmed(txids);
         }
     }
 
@@ -546,8 +547,9 @@ impl ChainState {
             if skip.contains(&txid) {
                 continue;
             }
-            let outcome =
-                pool.accept_transaction(tx, None, |txid, index| self.has_utxo(txid, index));
+            let outcome = pool
+                .lock()
+                .accept_transaction(tx, None, |txid, index| self.has_utxo(txid, index));
             match outcome {
                 MempoolAddOutcome::Accepted { txid } => {
                     debug!(%txid, "reintroduced transaction after reorg");
@@ -790,7 +792,7 @@ mod tests {
         assert_eq!(locator.first(), Some(&pow_hash(&chain.tip().header)));
         assert_eq!(
             locator.last(),
-            Some(&pow_hash(&chain.index[&chain.active_chain[0]].header()))
+            Some(&pow_hash(chain.index[&chain.active_chain[0]].header()))
         );
     }
 
@@ -805,7 +807,7 @@ mod tests {
             let block = mine_child_block(&chain, &params, 1_000 + i * params.target_spacing);
             chain.apply_block(block).expect("apply block");
         }
-        let locator = vec![pow_hash(&chain.index[&chain.active_chain[2]].header())];
+        let locator = vec![pow_hash(chain.index[&chain.active_chain[2]].header())];
         let headers = chain.headers_for_locator(&locator, None, 10);
         assert_eq!(headers.len(), 2);
         assert_eq!(
@@ -910,7 +912,7 @@ mod tests {
         let genesis = build_block([0u8; 32], 0, &params);
         let mut chain = ChainState::bootstrap(params.clone(), store, genesis).expect("bootstrap");
 
-        let mempool = Arc::new(TxPool::new(TxPoolConfig::default()));
+        let mempool = Arc::new(Mutex::new(TxPool::new(TxPoolConfig::default())));
         chain.attach_mempool(Arc::clone(&mempool));
 
         let base_time = 1_000 + params.target_spacing;
@@ -931,7 +933,7 @@ mod tests {
             stamp: base_time + 1,
             extra: (5_000u64).to_le_bytes().to_vec(),
         };
-        let binding = binding_hash(&[spend_output.clone()], &witness);
+        let binding = binding_hash(std::slice::from_ref(&spend_output), &witness);
         let spend_input = build_signed_input(
             *coinbase_txid.as_bytes(),
             0,
@@ -945,11 +947,13 @@ mod tests {
             .set_witness(witness)
             .build();
 
-        let outcome = mempool.accept_transaction(spend_tx.clone(), None, |txid, index| {
-            chain.has_utxo(txid, index)
-        });
+        let outcome = mempool
+            .lock()
+            .accept_transaction(spend_tx.clone(), None, |txid, index| {
+                chain.has_utxo(txid, index)
+            });
         assert!(matches!(outcome, MempoolAddOutcome::Accepted { .. }));
-        assert!(mempool.contains(&spend_tx.txid()));
+        assert!(mempool.lock().contains(&spend_tx.txid()));
 
         let next_material = KeyMaterial::random();
         let coinbase2 = coinbase_with_material(&next_material, base_time + params.target_spacing);
@@ -962,7 +966,7 @@ mod tests {
         );
         chain.apply_block(block2).expect("apply block 2");
 
-        assert!(!mempool.contains(&spend_tx.txid()));
+        assert!(!mempool.lock().contains(&spend_tx.txid()));
     }
 
     #[test]
@@ -973,7 +977,7 @@ mod tests {
         let genesis = build_block([0u8; 32], 0, &params);
         let mut chain = ChainState::bootstrap(params.clone(), store, genesis).expect("bootstrap");
 
-        let mempool = Arc::new(TxPool::new(TxPoolConfig::default()));
+        let mempool = Arc::new(Mutex::new(TxPool::new(TxPoolConfig::default())));
         chain.attach_mempool(Arc::clone(&mempool));
 
         let base_time = 2_000 + params.target_spacing;
@@ -1003,7 +1007,7 @@ mod tests {
             stamp: base_time + 1,
             extra: (6_000u64).to_le_bytes().to_vec(),
         };
-        let parent_binding = binding_hash(&[parent_output.clone()], &parent_witness);
+        let parent_binding = binding_hash(std::slice::from_ref(&parent_output), &parent_witness);
         let parent_input = build_signed_input(
             *block1.txs[0].txid().as_bytes(),
             0,
@@ -1045,7 +1049,7 @@ mod tests {
             stamp: base_time + 2,
             extra: (4_000u64).to_le_bytes().to_vec(),
         };
-        let child_binding = binding_hash(&[child_output.clone()], &child_witness);
+        let child_binding = binding_hash(std::slice::from_ref(&child_output), &child_witness);
         let child_input = build_signed_input(
             *parent_tx.txid().as_bytes(),
             0,
@@ -1093,9 +1097,9 @@ mod tests {
             mine_block_from(&block3_alt, &params, n_bits, alt_time4, vec![alt_coinbase4]);
         chain.apply_block(block4_alt).expect("apply alt block 4");
 
-        assert!(mempool.contains(&parent_tx.txid()));
-        assert!(mempool.contains(&child_tx.txid()));
-        let stats = mempool.stats();
+        assert!(mempool.lock().contains(&parent_tx.txid()));
+        assert!(mempool.lock().contains(&child_tx.txid()));
+        let stats = mempool.lock().stats();
         assert_eq!(stats.tx_count, 2);
         assert_eq!(stats.orphan_count, 0);
     }

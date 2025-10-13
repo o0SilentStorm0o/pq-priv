@@ -76,7 +76,7 @@ async fn run_node(args: RunArgs) -> anyhow::Result<()> {
     ))?;
 
     let chain = Arc::new(Mutex::new(chain_state));
-    let mempool = Arc::new(TxPool::new(config.mempool.clone()));
+    let mempool = Arc::new(Mutex::new(TxPool::new(config.mempool.clone())));
     let sync = Arc::new(SyncManager::new(
         config.sync_orphan_limit,
         config.sync_orphan_ttl,
@@ -93,20 +93,21 @@ async fn run_node(args: RunArgs) -> anyhow::Result<()> {
         ..P2pConfig::default()
     };
 
-    let (height, listen_addr) = {
+    let height = {
         let guard = chain.lock();
-        (guard.height(), p2p_config.listen)
+        guard.height()
     };
     let mut version = Version::user_agent("pq-priv-node", height);
     let advertised = NodeAddr::new(
-        listen_addr.ip().to_string(),
-        listen_addr.port(),
+        config.p2p_listen.ip().to_string(),
+        config.p2p_listen.port(),
         Services::NODE_NETWORK,
     );
     version.receiver = advertised.clone();
     version.sender = advertised;
 
     let network = start_network(p2p_config, version).await?;
+    let listen_addr = network.config().listen;
     let relay = Relay::new(
         Arc::clone(&mempool),
         Arc::clone(&chain),
@@ -114,8 +115,13 @@ async fn run_node(args: RunArgs) -> anyhow::Result<()> {
         Arc::clone(&sync),
     );
 
-    let rpc_context = RpcContext::new(Arc::clone(&mempool), Arc::clone(&chain), network.clone());
-    let rpc_handle = spawn_rpc_server(rpc_context, config.rpc_listen).await?;
+    let rpc_context = Arc::new(RpcContext::new(
+        Arc::clone(&mempool),
+        Arc::clone(&chain),
+        network.clone(),
+    ));
+    let (rpc_handle, rpc_addr) =
+        spawn_rpc_server(Arc::clone(&rpc_context), config.rpc_listen).await?;
 
     let peer_task = tokio::spawn(run_peer_event_loop(relay));
     let chain_task = tokio::spawn(run_chain_event_loop(
@@ -127,7 +133,7 @@ async fn run_node(args: RunArgs) -> anyhow::Result<()> {
 
     info!(
         p2p = %listen_addr,
-        rpc = %config.rpc_listen,
+        rpc = %rpc_addr,
         "node services started"
     );
 
