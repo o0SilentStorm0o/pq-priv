@@ -71,7 +71,7 @@ These checks are set as "required" for merge into protected branches.
 * Keep specifications in the [`spec/`](./spec/README.md) directory. Accompany each major protocol update with an ADR (`docs/ADR-XXXX.md`).
 * Release process is described in [`spec/build.md`](./spec/build.md).
 
-## Komunikace
+## Communication
 
 * Technical discussions: GitHub Issues + weekly sync.
 * Security reports: see [Security disclosures](https://pq-priv.example.com/security).
