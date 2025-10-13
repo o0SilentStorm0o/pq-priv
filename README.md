@@ -112,10 +112,10 @@ curl http://localhost:8745/health      # node_b
 curl http://localhost:8645/chain/tip   # genesis block
 ```
 
-## Dokumentace
+## Documentation
 
-* [Implementační blueprint (v0.9)](./spec/blueprint.md) – strategický plán MVP.
+* [Implementation blueprint (v0.9)](./spec/blueprint.md) – strategic MVP plan.
 * [`spec/build.md`](./spec/build.md) – build & release handbook.
-* [`spec/README.md`](./spec/README.md) – struktura specifikací.
+* [`spec/README.md`](./spec/README.md) – specifications structure.
 
-Příspěvky jsou vítány! Nezapomeňte si přečíst [CONTRIBUTING.md](./CONTRIBUTING.md) a [SECURITY.md](./SECURITY.md).
+Contributions are welcome! Please read [CONTRIBUTING.md](./CONTRIBUTING.md) and [SECURITY.md](./SECURITY.md).

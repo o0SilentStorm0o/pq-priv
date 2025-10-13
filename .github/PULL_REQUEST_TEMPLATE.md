@@ -1,16 +1,16 @@
 ## Summary
-- [ ] Změna je v souladu s implementačním blueprintem
-- [ ] Přiložená dokumentace (README/spec/ADR) je aktuální
-- [ ] Zahrnuty testy dokazující funkčnost
+- [ ] Change is in accordance with the implementation blueprint
+- [ ] Attached documentation (README/spec/ADR) is current
+- [ ] Includes tests proving functionality
 
-### Popis změn
-_Popis hlavních úprav, případně odkaz na issue._
+### Description of changes
+_Description of main changes, or link to issue._
 
-### Testovací protokol
-_Přidejte příkazy a výsledky (např. `cargo test`, `make lint`)._
+### Test protocol
+_Add commands and results (e.g. `cargo test`, `make lint`)._
 
-### Bezpečnost
-_Popis potenciálních dopadů, audit logy, rollback plán._
+### Security
+_Description of potential impacts, audit logs, rollback plan._
 
-### Dokumentace
-_Odkazy na aktualizované specifikace nebo ADR._
+### Documentation
+_Links to updated specifications or ADR._
