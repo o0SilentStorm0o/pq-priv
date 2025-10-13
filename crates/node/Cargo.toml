@@ -20,7 +20,7 @@ pow = { path = "../pow", version = "0.1.0" }
 tx = { path = "../tx", version = "0.1.0" }
 utxo = { path = "../utxo", version = "0.1.0" }
 hex = "0.4"
-thiserror = "1.0"
+thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
 p2p = { path = "../p2p", version = "0.1.0" }
