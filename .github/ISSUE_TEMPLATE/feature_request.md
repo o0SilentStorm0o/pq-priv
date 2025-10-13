@@ -1,23 +1,23 @@
 ---
 name: "Feature Request"
-about: "Navrhněte vylepšení podle implementačního blueprintu"
+about: "Propose an improvement according to the implementation blueprint"
 title: "[Feature] "
 labels: [enhancement]
 assignees: []
 ---
 
-## Popis
-_Jaké zadání chcete realizovat? Odkaz na blueprint / specifikaci vítán._
+## Description
+_What requirement do you want to implement? Link to blueprint / specification welcome._
 
-## Motivace a hodnoty
-_Proč je změna důležitá (bezpečnost, UX, compliance, výkon)?_
+## Motivation and values
+_Why is the change important (security, UX, compliance, performance)?_
 
-## Návrh řešení
-_Stručný návrh architektury, API nebo UX. Zvažte dopad na testy a dokumentaci._
+## Proposed solution
+_Brief architectural, API or UX proposal. Consider impact on tests and documentation._
 
-## Akceptační kritéria
+## Acceptance criteria
 - [ ] ...
 - [ ] ...
 
-## Další poznámky
-_Závislosti, rizika, odhad náročnosti._
+## Additional notes
+_Dependencies, risks, effort estimate._

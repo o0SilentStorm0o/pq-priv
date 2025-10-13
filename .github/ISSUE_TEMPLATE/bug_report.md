@@ -1,28 +1,28 @@
 ---
 name: "Bug Report"
-about: "Nahlaste chybu, která ohrožuje stabilitu, bezpečnost nebo kompatibilitu"
+about: "Report a bug that threatens stability, security or compatibility"
 title: "[Bug] "
 labels: [bug]
 assignees: []
 ---
 
-## Popis chyby
-_Popiste očekávané vs. skutečné chování a uveďte minimální kroky k reprodukci._
+## Bug description
+_Describe expected vs. actual behavior and provide minimal steps to reproduce._
 
-## Prostředí
-- Verze PQ-PRIV: 
-- OS / architektura: 
+## Environment
+- PQ-PRIV version: 
+- OS / architecture: 
 - Rust toolchain (`rustc --version`): 
-- Další relevantní informace:
+- Other relevant information:
 
-## Logy a výpisy
-_Přiložte relevantní logy (bez citlivých údajů)._
+## Logs and output
+_Attach relevant logs (without sensitive data)._
 
-## Bezpečnostní dopad
-- [ ] Kritický (úplný útok / ztráta prostředků)
-- [ ] Vysoký (DoS, ztráta soukromí)
-- [ ] Střední
-- [ ] Nízký / kosmetický
+## Security impact
+- [ ] Critical (full attack / loss of assets)
+- [ ] High (DoS, loss of privacy)
+- [ ] Medium
+- [ ] Low / cosmetic
 
-## Návrh / poznámky
-_Vaše doporučení k nápravě nebo dočasným mitigacím._
+## Suggestion / notes
+_Your recommendations for remediation or temporary mitigations._

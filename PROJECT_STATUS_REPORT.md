@@ -8,21 +8,21 @@
 
 ## Executive Summary
 
-PQ-PRIV je výzkumný post-kvantový privacy blockchain v raném stadiu MVP vývoje. Projekt má solidní technický základ s funkčním full-node implementací, persistence vrstvou, P2P sítí a kompletním CI/CD pipeline. **Aktuální stav: 35-40% MVP dokončeno** s kritickými kryptografickými komponentami (Dilithium, STARK proofs) stále v placeholder fázi.
+PQ-PRIV is a research post-quantum privacy blockchain in early MVP development stage. The project has a solid technical foundation with functional full-node implementation, persistence layer, P2P network and complete CI/CD pipeline. **Current status: 35-40% MVP completed** with critical cryptographic components (Dilithium, STARK proofs) still in placeholder phase.
 
-### Klíčové metriky
-- **Codebase:** 37 Rust souborů, ~248 KB kódu
-- **Test Coverage:** 48 testů (100% passing), 19 unit + 5 integration + 24 crate-level
+### Key Metrics
+- **Codebase:** 37 Rust files, ~248 KB of code
+- **Test Coverage:** 48 tests (100% passing), 19 unit + 5 integration + 24 crate-level
 - **Build Time:** ~8-10s (dev), ~42s (release)
-- **CI Status:** ✅ Plně funkční (GitHub Actions)
+- **CI Status:** ✅ Fully functional (GitHub Actions)
 - **Docker:** ✅ Multi-node testnet ready
-- **Documentation:** 13 markdown souborů (profesionální standard)
+- **Documentation:** 13 markdown files (professional standard)
 
 ---
 
 ## 1. TECHNICKÁ ANALÝZA
 
-### 1.1 Architektura & Struktura
+### 1.1 Architecture & Structure
 
 #### Workspace Crates (11 celkem)
 
@@ -41,7 +41,7 @@ PQ-PRIV je výzkumný post-kvantový privacy blockchain v raném stadiu MVP výv
 | **`utxo`** | ~700 | In-memory UTXO store, double-spend detection | ✅ Complete | Low |
 | **`wallet`** | ~400 | CLI wallet prototype (minimal) | ⚠️ Stub Only | High |
 
-**Total Estimated LoC:** ~10,000 lines (bez testů a dependencies)
+**Total Estimated LoC:** ~10,000 lines (excluding tests and dependencies)
 
 #### Dependency Graph
 ```
@@ -66,7 +66,7 @@ wallet (CLI binary)
 └── tx
 ```
 
-### 1.2 Implementované Funkce (Sprint 0-3)
+### 1.2 Implemented Features (Sprint 0-3)
 
 #### ✅ **Sprint 0: Foundation** (100% Complete)
 - [x] Reproducible builds (Rust 1.90.0, edition 2024)
@@ -113,18 +113,18 @@ wallet (CLI binary)
 
 **Status:** 
 - ✅ API design complete (AlgTag enum, Signature wrapper)
-- ❌ **Ed25519 je pouze placeholder** pro Dilithium
-- ❌ SPHINCS+ fallback není implementován
-- ❌ STARK proofs pro privacy zcela chybí
+- ❌ **Ed25519 is only a placeholder** for Dilithium
+- ❌ SPHINCS+ fallback not implemented
+- ❌ STARK proofs for privacy completely missing
 
 **Impact:** 
-- Blockchain není post-quantum secure
-- Privacy features nefunkční (stealth addresses fungují, ale bez ZK proofs)
-- **Blocker pro production deployment**
+- Blockchain is not post-quantum secure
+- Privacy features non-functional (stealth addresses work, but without ZK proofs)
+- **Blocker for production deployment**
 
 **Effort Estimate:** 
-- Dilithium integration: 2-3 týdny (pokud existuje Rust binding)
-- STARK proofs: 3-6 měsíců (vyžaduje výzkum + implementaci)
+- Dilithium integration: 2-3 weeks (if Rust binding exists)
+- STARK proofs: 3-6 months (requires research + implementation)
 
 #### ⚠️ **HIGH: Range Proofs Missing**
 **File:** `crates/tx/src/lib.rs` (Witness struct)
@@ -137,14 +137,14 @@ pub struct Witness {
 }
 ```
 
-**Status:** Range proofs jsou placeholder - transakce nemají amount validation.
+**Status:** Range proofs are placeholder - transactions have no amount validation.
 
 **Impact:**
-- Inflation risk (lze vytvořit coiny z ničeho)
-- Confidential amounts nefunkční
-- **Blocker pro mainnet**
+- Inflation risk (can create coins from nothing)
+- Confidential amounts non-functional
+- **Blocker for mainnet**
 
-**Effort Estimate:** 4-8 týdnů (Bulletproofs implementace)
+**Effort Estimate:** 4-8 weeks (Bulletproofs implementation)
 
 #### ⚠️ **MEDIUM: RocksDB Stub**
 **File:** `Cargo.toml` (line 24-26)
@@ -154,33 +154,33 @@ pub struct Witness {
 rocksdb = { path = "crates/rocksdb_stub" }
 ```
 
-**Status:** Dev-only in-memory stub pro rychlejší kompilaci.
+**Status:** Dev-only in-memory stub for faster compilation.
 
 **Impact:** 
-- Production build vyžaduje odstranění patche
-- Performance neověřena s reálným RocksDB
-- Snapshot/checkpoint code netestován s reálnou DB
+- Production build requires removing the patch
+- Performance unverified with real RocksDB
+- Snapshot/checkpoint code not tested with real DB
 
 **Action Required:** 
-1. Odstranit patch před production build
+1. Remove patch before production build
 2. Benchmark RocksDB performance
-3. Otestovat snapshot restore s multi-GB databází
+3. Test snapshot restore with multi-GB database
 
 #### ⚠️ **MEDIUM: Wallet Stub**
 **File:** `crates/wallet/src/main.rs`
 
-**Status:** CLI má pouze základní příkazy:
-- ✅ `keygen` - funguje
-- ⚠️ `send` - vytvoří placeholder tx, ale nepodepisuje
-- ⚠️ `audit` - vygeneruje view token, ale není validace
+**Status:** CLI has only basic commands:
+- ✅ `keygen` - works
+- ⚠️ `send` - creates placeholder tx, but doesn't sign
+- ⚠️ `audit` - generates view token, but no validation
 
 **Missing:**
-- [ ] Transaction signing a broadcasting
-- [ ] UTXO scanning a balance calculation
+- [ ] Transaction signing and broadcasting
+- [ ] UTXO scanning and balance calculation
 - [ ] Key derivation (BIP32/44 style)
-- [ ] RPC client pro komunikaci s node
+- [ ] RPC client for communication with node
 
-**Effort Estimate:** 3-4 týdny pro základní funkční wallet
+**Effort Estimate:** 3-4 weeks for basic functional wallet
 
 ### 1.4 Test Coverage Analysis
 
@@ -220,7 +220,7 @@ rocksdb = { path = "crates/rocksdb_stub" }
 - **Integration tests:** 2.04s
 - **Full suite:** ~10s (včetně compilation)
 
-**Assessment:** Test coverage je dobrá pro core komponenty, ale chybí E2E testy a wallet coverage.
+**Assessment:** Test coverage is good for core components, but E2E tests and wallet coverage missing.
 
 ### 1.5 Performance Characteristics
 
@@ -236,7 +236,7 @@ rocksdb = { path = "crates/rocksdb_stub" }
 - **RPC latency:** < 10ms (localhost)
 - **Memory usage:** ~50 MB baseline
 
-**Note:** Performance netestována s production RocksDB a velkými databázemi.
+**Note:** Performance not tested with production RocksDB and large databases.
 
 ### 1.6 Security Posture
 
@@ -248,7 +248,7 @@ rocksdb = { path = "crates/rocksdb_stub" }
 5. **Type Safety:** Rust edition 2024, strict mode
 6. **P2P Security:** 
    - Handshake protocol s version negotiation
-   - Ban scores pro misbehaving peers
+   - Ban scores for misbehaving peers
    - Rate limiting na message processing
 
 #### ❌ Missing Security Features
@@ -259,7 +259,7 @@ rocksdb = { path = "crates/rocksdb_stub" }
 5. **DoS Protection:** Minimální rate limiting
 6. **Audit Trail:** Žádný formal security audit
 
-**Risk Level:** **HIGH** - Production deployment by vyžadoval kompletní security audit a krypto implementaci.
+**Risk Level:** **HIGH** - Production deployment would require complete security audit and crypto implementation.
 
 ---
 
@@ -290,60 +290,60 @@ rocksdb = { path = "crates/rocksdb_stub" }
 - ✅ **Sprint 3:** Persistence & Sync (Q2-Q3 2025)
 
 #### Missing Sprint 2
-**Sprint 2 byl přeskočen nebo sloučen se Sprint 3.** Dokumentace nespecifikuje původní Sprint 2 scope.
+**Sprint 2 was skipped or merged with Sprint 3.** Documentation does not specify original Sprint 2 scope.
 
-**Inference:** Sprint 2 pravděpodobně zahrnoval:
-- Transaction validation logic (částečně v Sprint 3)
-- Mempool rozšíření (dokončeno v Sprint 1+3)
-- Initial wallet work (nedokončeno)
+**Inference:** Sprint 2 probably included:
+- Transaction validation logic (partially in Sprint 3)
+- Mempool expansion (completed in Sprint 1+3)
+- Initial wallet work (not completed)
 
 ### 2.3 Critical Path Analysis
 
-#### Blockers pro Production (Red)
-1. 🔴 **Dilithium/SPHINCS+ Implementation** (3-6 měsíců)
+#### Blockers for Production (Red)
+1. 🔴 **Dilithium/SPHINCS+ Implementation** (3-6 months)
    - External dependency: Rust binding for liboqs or pqcrypto
-   - Alternative: použít existující crate jako `pqcrypto-dilithium`
+   - Alternative: use existing crate like `pqcrypto-dilithium`
    
-2. 🔴 **STARK Proofs for Privacy** (6-12 měsíců)
-   - Vyžaduje: Circuit design, prover implementation
-   - Možná spolupráce: StarkWare, Risc0, nebo vlastní implementace
+2. 🔴 **STARK Proofs for Privacy** (6-12 months)
+   - Requires: Circuit design, prover implementation
+   - Possible collaboration: StarkWare, Risc0, or custom implementation
    
-3. 🔴 **Range Proofs (Bulletproofs)** (2-3 měsíce)
+3. 🔴 **Range Proofs (Bulletproofs)** (2-3 months)
    - Existing crate: `bulletproofs` by Dalek Cryptography
-   - Integration effort: střední
+   - Integration effort: medium
 
-4. 🔴 **Security Audit** (1-2 měsíce + $50k-150k)
+4. 🔴 **Security Audit** (1-2 months + $50k-150k)
    - Scope: Cryptography, consensus, P2P, storage
-   - Timeline: Po dokončení krypto implementace
+   - Timeline: After crypto implementation completion
 
 #### High Priority (Orange)
-5. 🟠 **Full Wallet Implementation** (1-2 měsíce)
-6. 🟠 **RocksDB Production Testing** (2-3 týdny)
-7. 🟠 **P2P Encryption (TLS)** (2-3 týdny)
-8. 🟠 **RPC Authentication** (1-2 týdny)
-9. 🟠 **E2E Integration Tests** (2-3 týdny)
+5. 🟠 **Full Wallet Implementation** (1-2 months)
+6. 🟠 **RocksDB Production Testing** (2-3 weeks)
+7. 🟠 **P2P Encryption (TLS)** (2-3 weeks)
+8. 🟠 **RPC Authentication** (1-2 weeks)
+9. 🟠 **E2E Integration Tests** (2-3 weeks)
 
 #### Medium Priority (Yellow)
-10. 🟡 **JSON-RPC 2.0 API** (Bitcoin-compatible methods)
-11. 🟡 **Light Client Support** (headers-only sync)
-12. 🟡 **Governance Mechanism** (pokud v roadmapu)
-13. 🟡 **Exchange Integration SDK**
+11. 🟡 **JSON-RPC 2.0 API** (Bitcoin-compatible methods)
+12. 🟡 **Light Client Support** (headers-only sync)
+13. 🟡 **Governance Mechanism** (if in roadmap)
+14. 🟡 **Exchange Integration SDK**
 
 ### 2.4 Resource Requirements
 
-#### Estimated Team Composition pro Next Phase
-- **1x Senior Cryptography Engineer** (Dilithium, STARK proofs) - 6-12 měsíců
-- **1x Blockchain Core Developer** (Range proofs, wallet) - 3-6 měsíců  
-- **1x DevOps/Testing Engineer** (Production RocksDB, E2E tests) - 2-3 měsíce
-- **1x Security Auditor** (External contractor) - 1-2 měsíce
+#### Estimated Team Composition for Next Phase
+- **1x Senior Cryptography Engineer** (Dilithium, STARK proofs) - 6-12 months
+- **1x Blockchain Core Developer** (Range proofs, wallet) - 3-6 months  
+- **1x DevOps/Testing Engineer** (Production RocksDB, E2E tests) - 2-3 months
+- **1x Security Auditor** (External contractor) - 1-2 months
 
-**Total FTE:** ~2.5 full-time equivalent na 6-12 měsíců
+**Total FTE:** ~2.5 full-time equivalent for 6-12 months
 
 #### Budget Estimate (Rough)
-- **Engineering:** $200k-400k (6-12 měsíců, 2-3 engineers)
+- **Engineering:** $200k-400k (6-12 months, 2-3 engineers)
 - **Security Audit:** $50k-150k (external)
 - **Infrastructure:** $5k-10k (testnet hosting, CI credits)
-- **Total:** **$255k-560k** pro dokončení MVP
+- **Total:** **$255k-560k** for MVP completion
 
 ### 2.5 Risk Assessment
 
@@ -428,30 +428,30 @@ rocksdb = { path = "crates/rocksdb_stub" }
 
 **Weaknesses:**
 - ⚠️ Crypto module tightly coupled to Ed25519
-- ⚠️ Wallet je stub (vyžaduje refactor)
-- ⚠️ RocksDB stub mask production issues
+- ⚠️ Wallet is stub (requires refactor)
+- ⚠️ RocksDB stub masks production issues
 - ⚠️ Limited inline documentation
 
 ---
 
-## 4. STRATEGICKÁ DOPORUČENÍ
+## 4. STRATEGIC RECOMMENDATIONS
 
 ### 4.1 Immediate Actions (Next 30 Days)
 
-1. **Remove RocksDB Stub** (1 týden)
-   - [ ] Odstranit patch z Cargo.toml
-   - [ ] Benchmark s reálným RocksDB
+1. **Remove RocksDB Stub** (1 week)
+   - [ ] Remove patch from Cargo.toml
+   - [ ] Benchmark with real RocksDB
    - [ ] Fix performance issues
    - [ ] Document production configuration
 
-2. **Expand Test Suite** (2 týdny)
+2. **Expand Test Suite** (2 weeks)
    - [ ] Multi-node network topology tests
    - [ ] Wallet unit tests
    - [ ] RPC endpoint full coverage
    - [ ] Snapshot restore verification
 
-3. **Documentation Sprint** (1 týden)
-   - [ ] Generate rustdoc a publish na docs.rs
+3. **Documentation Sprint** (1 week)
+   - [ ] Generate rustdoc and publish to docs.rs
    - [ ] Create deployment checklist
    - [ ] Write troubleshooting guide
 
@@ -469,7 +469,7 @@ rocksdb = { path = "crates/rocksdb_stub" }
    - [ ] Balance calculation
    - [ ] Basic key management
 
-6. **Security Hardening** (3-4 týdny)
+6. **Security Hardening** (3-4 weeks)
    - [ ] P2P TLS encryption
    - [ ] RPC authentication (JWT/API keys)
    - [ ] Rate limiting improvements
@@ -515,46 +515,46 @@ rocksdb = { path = "crates/rocksdb_stub" }
 
 ### 5.1 Overall Assessment
 
-**PQ-PRIV je architektonicky solidní blockchain projekt v rané MVP fázi**, s těmito charakteristikami:
+**PQ-PRIV is an architecturally solid blockchain project in early MVP phase**, with these characteristics:
 
 **Strengths:**
-- ✅ Čistá, modulární architektura
-- ✅ Funkční full-node s persistence a sync
-- ✅ Profesionální CI/CD a tooling
+- ✅ Clean, modular architecture
+- ✅ Functional full-node with persistence and sync
+- ✅ Professional CI/CD and tooling
 - ✅ Cross-platform support
-- ✅ Dobrá test coverage pro core komponenty
+- ✅ Good test coverage for core components
 
 **Critical Gaps:**
-- ❌ Post-quantum cryptography je placeholder (BLOCKER)
-- ❌ Privacy features nejsou implementované (BLOCKER)
-- ❌ Wallet je stub
-- ⚠️ RocksDB stub mask production issues
+- ❌ Post-quantum cryptography is placeholder (BLOCKER)
+- ❌ Privacy features not implemented (BLOCKER)
+- ❌ Wallet is stub
+- ⚠️ RocksDB stub masks production issues
 
 **Readiness:**
 - 🟢 **Academic Research:** Ready now
 - 🟢 **Testnet Grants:** Ready now
-- 🟡 **Public Testnet:** 3-6 měsíců (po krypto implementaci)
-- 🔴 **Mainnet:** 9-18 měsíců (po security audit a STARK proofs)
+- 🟡 **Public Testnet:** 3-6 months (after crypto implementation)
+- 🔴 **Mainnet:** 9-18 months (after security audit and STARK proofs)
 
 ### 5.2 Go/No-Go Recommendation
 
-**RECOMMENDATION: GO** s podmínkami
+**RECOMMENDATION: GO** with conditions
 
-**Podmínky pro pokračování:**
-1. **Secure funding** pro 6-12 měsíců vývoje ($255k-560k)
-2. **Hire senior cryptography engineer** (kritická role)
-3. **Commit to security audit** po krypto implementaci
-4. **Remove RocksDB stub** v příštím sprintu
+**Conditions for continuation:**
+1. **Secure funding** for 6-12 months of development ($255k-560k)
+2. **Hire senior cryptography engineer** (critical role)
+3. **Commit to security audit** after crypto implementation
+4. **Remove RocksDB stub** in next sprint
 5. **Define clear mainnet launch criteria**
 
 **Alternative Strategy:**
-Pokud financování není dostupné, zvažte **open-source community approach**:
-- Publikovat roadmap a technical challenges
-- Bounty program pro key features (Dilithium integration, range proofs)
-- Academic partnerships (univerzity s PQ crypto research)
+If funding is not available, consider **open-source community approach**:
+- Publish roadmap and technical challenges
+- Bounty program for key features (Dilithium integration, range proofs)
+- Academic partnerships (universities with PQ crypto research)
 - Grant applications (Ethereum Foundation, Web3 Foundation, NSF)
 
-### 5.3 Success Metrics pro Next Phase
+### 5.3 Success Metrics for Next Phase
 
 **3-Month Goals:**
 - [ ] Dilithium integration complete (tests passing)
