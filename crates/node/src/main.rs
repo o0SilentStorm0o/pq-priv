@@ -67,7 +67,7 @@ async fn run_node(args: RunArgs) -> anyhow::Result<()> {
     fs::create_dir_all(&config.db_path)?;
     fs::create_dir_all(&config.snapshots_path)?;
 
-    let store = Store::open(&config.db_path)?;
+    let store = Store::open_with_tuning(&config.db_path, config.db_tuning.clone())?;
     let mut chain_state = ChainState::bootstrap(params.clone(), store, genesis.clone())?;
     chain_state.configure_snapshots(SnapshotConfig::new(
         config.snapshots_path.clone(),

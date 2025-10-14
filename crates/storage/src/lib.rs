@@ -2,6 +2,8 @@ mod batch;
 mod checkpoint;
 pub mod config;
 mod errors;
+#[cfg(feature = "metrics")]
+pub mod metrics;
 mod schema;
 mod store;
 mod utxo_store;

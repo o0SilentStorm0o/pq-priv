@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use serde::Deserialize;
+use storage::DbTuning;
 use tracing::info;
 
 use crate::mempool::TxPoolConfig;
@@ -16,6 +17,7 @@ pub struct NodeConfig {
     pub rpc_listen: SocketAddr,
     pub seeds: Vec<SocketAddr>,
     pub db_path: PathBuf,
+    pub db_tuning: DbTuning,
     pub snapshots_path: PathBuf,
     pub snapshot_interval: u64,
     pub snapshot_keep: usize,
@@ -32,6 +34,8 @@ impl NodeConfig {
             if let Some(explicit) = path {
                 info!(path = %explicit.display(), "configuration file not found, using defaults");
             }
+            // Apply environment variable overrides to DbTuning
+            config.db_tuning = DbTuning::from_env(config.db_tuning);
             return Ok(config);
         }
 
@@ -52,6 +56,21 @@ impl NodeConfig {
         if let Some(path) = raw.db_path {
             config.db_path = path;
         }
+        if let Some(db) = raw.db {
+            // Apply TOML config
+            if let Some(write_buffer_mb) = db.write_buffer_mb {
+                config.db_tuning.write_buffer_mb = write_buffer_mb;
+            }
+            if let Some(block_cache_mb) = db.block_cache_mb {
+                config.db_tuning.block_cache_mb = block_cache_mb;
+            }
+            if let Some(compression) = db.compression {
+                config.db_tuning.compression = compression;
+            }
+        }
+        // Apply environment variable overrides (highest priority)
+        config.db_tuning = DbTuning::from_env(config.db_tuning);
+        
         if let Some(path) = raw.snapshots_path {
             config.snapshots_path = path;
         }
@@ -94,6 +113,7 @@ impl Default for NodeConfig {
             rpc_listen: "127.0.0.1:8645".parse().expect("valid rpc address"),
             seeds: Vec::new(),
             db_path: PathBuf::from(".pqpriv/node"),
+            db_tuning: DbTuning::default(),
             snapshots_path: PathBuf::from(".pqpriv/snapshots"),
             snapshot_interval: 1_000,
             snapshot_keep: 3,
@@ -115,6 +135,7 @@ struct RawNodeConfig {
     rpc_listen: Option<SocketAddr>,
     seeds: Option<Vec<SocketAddr>>,
     db_path: Option<PathBuf>,
+    db: Option<RawDbConfig>,
     snapshots_path: Option<PathBuf>,
     snapshot_interval: Option<u64>,
     snapshot_keep: Option<usize>,
@@ -124,6 +145,14 @@ struct RawNodeConfig {
 }
 
 #[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+struct RawDbConfig {
+    write_buffer_mb: Option<usize>,
+    block_cache_mb: Option<usize>,
+    compression: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]]
 #[serde(default)]
 struct RawTxPoolConfig {
     max_bytes: Option<usize>,

@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 license.workspace = true
 
+[features]
+default = ["metrics"]
+metrics = []
+
 [dependencies]
 rocksdb = { version = "0.22", default-features = false, features = ["lz4", "zstd", "multi-threaded-cf"] }
 codec = { path = "../codec", version = "0.1.0" }

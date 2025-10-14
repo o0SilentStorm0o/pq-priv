@@ -80,6 +80,11 @@ impl BlockBatch {
         }
         let mut opts = WriteOptions::default();
         opts.disable_wal(false);
+        
+        // Measure write batch latency for metrics
+        #[cfg(feature = "metrics")]
+        let _timer = crate::metrics::WriteBatchTimer::start();
+        
         self.store.db().write_opt(self.writes, &opts)?;
         Ok(())
     }
