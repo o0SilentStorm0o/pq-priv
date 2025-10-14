@@ -75,11 +75,14 @@ impl TipMetadata {
 #[derive(Clone)]
 pub struct Store {
     db: Arc<DB>,
+    /// Block cache must be kept alive for the lifetime of the DB
+    #[allow(dead_code)]
+    block_cache: Option<Arc<Cache>>,
 }
 
 impl Store {
     /// Build RocksDB options from tuning configuration.
-    fn build_db_options(tuning: &DbTuning) -> (Options, BlockBasedOptions) {
+    fn build_db_options(tuning: &DbTuning) -> (Options, BlockBasedOptions, Option<Arc<Cache>>) {
         let mut opts = Options::default();
         opts.create_if_missing(true);
         opts.create_missing_column_families(true);
@@ -120,13 +123,18 @@ impl Store {
 
         // Block-based table options
         let mut block_opts = BlockBasedOptions::default();
-        if tuning.block_cache_mb() > 0 {
-            let cache = Cache::new_lru_cache((tuning.block_cache_mb() as usize) * 1024 * 1024);
+        let cache = if tuning.block_cache_mb() > 0 {
+            let cache = Arc::new(Cache::new_lru_cache(
+                (tuning.block_cache_mb() as usize) * 1024 * 1024,
+            ));
             block_opts.set_block_cache(&cache);
-        }
+            Some(cache)
+        } else {
+            None
+        };
         block_opts.set_bloom_filter(10.0, false);
 
-        (opts, block_opts)
+        (opts, block_opts, cache)
     }
 
     /// Open database with default tuning.
@@ -140,7 +148,7 @@ impl Store {
         path: impl AsRef<Path>,
         tuning: DbTuning,
     ) -> Result<Self, StorageError> {
-        let (mut opts, block_opts) = Self::build_db_options(&tuning);
+        let (mut opts, block_opts, cache) = Self::build_db_options(&tuning);
 
         opts.set_block_based_table_factory(&block_opts);
 
@@ -153,7 +161,10 @@ impl Store {
         ];
 
         let db = DB::open_cf_descriptors(&opts, path, cf_descriptors)?;
-        let store = Self { db: Arc::new(db) };
+        let store = Self {
+            db: Arc::new(db),
+            block_cache: cache,
+        };
         store.ensure_bootstrap()?;
         Ok(store)
     }
