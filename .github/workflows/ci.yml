@@ -20,6 +20,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Install LLVM (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: KyleMayes/install-llvm-action@v1
+        with:
+          version: "16.0"
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@v1
         with:

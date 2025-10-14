@@ -19,9 +19,8 @@
 | `crates/node`     | Full node daemon: async runtime, P2P/RPC services, sync orchestration |
 | `crates/p2p`      | P2P networking: peer management, handshake, inventory system |
 | `crates/pow`      | Proof-of-Work target/retarget helpers |
-| `crates/rocksdb_stub` | Development stub for RocksDB (fast compilation, no persistence) |
 | `crates/spec`     | Shared protocol constants/types |
-| `crates/storage`  | RocksDB persistence layer with checkpoint support |
+| `crates/storage`  | RocksDB persistence layer with tunable performance and checkpoint support |
 | `crates/tx`       | Transaction model, builder, canonical txid/sighash |
 | `crates/utxo`     | In-memory ledger, double-spend detection, integration tests |
 | `crates/wallet`   | CLI wallet prototype (key management, audit stubs) |
@@ -117,5 +116,6 @@ curl http://localhost:8645/chain/tip   # genesis block
 * [Implementation blueprint (v0.9)](./spec/blueprint.md) – strategic MVP plan.
 * [`spec/build.md`](./spec/build.md) – build & release handbook.
 * [`spec/README.md`](./spec/README.md) – specifications structure.
+* **[Storage Performance Tuning](./docs/perf/storage.md)** – RocksDB configuration and optimization guide.
 
 Contributions are welcome! Please read [CONTRIBUTING.md](./CONTRIBUTING.md) and [SECURITY.md](./SECURITY.md).

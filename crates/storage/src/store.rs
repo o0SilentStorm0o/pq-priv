@@ -8,11 +8,13 @@ use codec::from_slice_cbor;
 use consensus::{Block, BlockHeader, block_work, pow_hash};
 use rocksdb::checkpoint::Checkpoint;
 use rocksdb::{
-    ColumnFamily, ColumnFamilyDescriptor, DB, IteratorMode, Options, WriteBatch, WriteOptions,
+    BlockBasedOptions, BoundColumnFamily, Cache, ColumnFamilyDescriptor, DB, DBCompressionType,
+    IteratorMode, Options, WriteBatch, WriteOptions,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::batch::BlockBatch;
+use crate::config::DbTuning;
 use crate::errors::StorageError;
 use crate::schema::{
     self, Column, META_COMPACT_INDEX, META_TIP, block_key, decode_height, encode_height,
@@ -73,22 +75,96 @@ impl TipMetadata {
 #[derive(Clone)]
 pub struct Store {
     db: Arc<DB>,
+    /// Block cache must be kept alive for the lifetime of the DB
+    #[allow(dead_code)]
+    block_cache: Option<Arc<Cache>>,
 }
 
 impl Store {
-    pub fn open(path: impl AsRef<Path>) -> Result<Self, StorageError> {
+    /// Build RocksDB options from tuning configuration.
+    fn build_db_options(tuning: &DbTuning) -> (Options, BlockBasedOptions, Option<Arc<Cache>>) {
         let mut opts = Options::default();
         opts.create_if_missing(true);
         opts.create_missing_column_families(true);
+
+        // Parallelism
+        opts.increase_parallelism(tuning.max_background_jobs());
+
+        // Compaction
+        opts.set_level_compaction_dynamic_level_bytes(tuning.compaction_dynamic());
+        opts.set_target_file_size_base(tuning.target_file_size_mb() * 1024 * 1024);
+
+        // Write buffer
+        opts.set_write_buffer_size((tuning.write_buffer_mb() as usize) * 1024 * 1024);
+
+        // Sync settings
+        opts.set_bytes_per_sync(tuning.bytes_per_sync_mb() * 1024 * 1024);
+        opts.set_wal_bytes_per_sync(tuning.wal_bytes_per_sync_mb() * 1024 * 1024);
+
+        // Compression
+        match tuning.compression() {
+            "lz4" => opts.set_compression_type(DBCompressionType::Lz4),
+            "zstd" => opts.set_compression_type(DBCompressionType::Zstd),
+            "none" => opts.set_compression_type(DBCompressionType::None),
+            _ => opts.set_compression_type(DBCompressionType::Zstd),
+        }
+
+        // Pipelined writes
+        if tuning.enable_pipelined_write() {
+            opts.set_enable_pipelined_write(true);
+        }
+
+        // Read-ahead
+        if tuning.readahead_mb() > 0 {
+            opts.set_advise_random_on_open(false);
+            opts.set_allow_concurrent_memtable_write(true);
+            opts.set_compaction_readahead_size((tuning.readahead_mb() * 1024 * 1024) as usize);
+        }
+
+        // Block-based table options
+        let mut block_opts = BlockBasedOptions::default();
+        let cache = if tuning.block_cache_mb() > 0 {
+            let cache = Arc::new(Cache::new_lru_cache(
+                (tuning.block_cache_mb() as usize) * 1024 * 1024,
+            ));
+            block_opts.set_block_cache(&cache);
+            Some(cache)
+        } else {
+            None
+        };
+        block_opts.set_bloom_filter(10.0, false);
+
+        (opts, block_opts, cache)
+    }
+
+    /// Open database with default tuning.
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, StorageError> {
+        let tuning = DbTuning::default().from_env();
+        Self::open_with_tuning(path, tuning)
+    }
+
+    /// Open database with custom tuning parameters.
+    pub fn open_with_tuning(
+        path: impl AsRef<Path>,
+        tuning: DbTuning,
+    ) -> Result<Self, StorageError> {
+        let (mut opts, block_opts, cache) = Self::build_db_options(&tuning);
+
+        opts.set_block_based_table_factory(&block_opts);
+
         let cf_descriptors = vec![
-            ColumnFamilyDescriptor::new(schema::CF_HEADERS, Options::default()),
-            ColumnFamilyDescriptor::new(schema::CF_BLOCKS, Options::default()),
-            ColumnFamilyDescriptor::new(schema::CF_UTXO, Options::default()),
-            ColumnFamilyDescriptor::new(schema::CF_LINKTAG, Options::default()),
-            ColumnFamilyDescriptor::new(schema::CF_META, Options::default()),
+            ColumnFamilyDescriptor::new(schema::CF_HEADERS, opts.clone()),
+            ColumnFamilyDescriptor::new(schema::CF_BLOCKS, opts.clone()),
+            ColumnFamilyDescriptor::new(schema::CF_UTXO, opts.clone()),
+            ColumnFamilyDescriptor::new(schema::CF_LINKTAG, opts.clone()),
+            ColumnFamilyDescriptor::new(schema::CF_META, opts.clone()),
         ];
+
         let db = DB::open_cf_descriptors(&opts, path, cf_descriptors)?;
-        let store = Self { db: Arc::new(db) };
+        let store = Self {
+            db: Arc::new(db),
+            block_cache: cache,
+        };
         store.ensure_bootstrap()?;
         Ok(store)
     }
@@ -104,7 +180,7 @@ impl Store {
     pub fn tip(&self) -> Result<Option<TipInfo>, StorageError> {
         let cf_meta = self.cf(Column::Meta)?;
         let key = meta_key(META_TIP);
-        let data = match self.db.get_cf(cf_meta, &key)? {
+        let data = match self.db.get_cf(&cf_meta, &key)? {
             Some(bytes) => bytes,
             None => return Ok(None),
         };
@@ -119,7 +195,7 @@ impl Store {
         let data = serde_json::to_vec(&meta)?;
         let mut opts = WriteOptions::default();
         opts.disable_wal(false);
-        self.db.put_cf_opt(cf_meta, &key, data, &opts)?;
+        self.db.put_cf_opt(&cf_meta, &key, data, &opts)?;
         Ok(())
     }
 
@@ -128,14 +204,14 @@ impl Store {
         let key = meta_key(META_TIP);
         let mut opts = WriteOptions::default();
         opts.disable_wal(false);
-        self.db.delete_cf_opt(cf_meta, &key, &opts)?;
+        self.db.delete_cf_opt(&cf_meta, &key, &opts)?;
         Ok(())
     }
 
     pub fn header_by_height(&self, height: u64) -> Result<Option<BlockHeader>, StorageError> {
         let cf = self.cf(Column::Headers)?;
         let key = header_key(height);
-        let value = match self.db.get_cf(cf, key)? {
+        let value = match self.db.get_cf(&cf, key)? {
             Some(data) => data,
             None => return Ok(None),
         };
@@ -146,7 +222,7 @@ impl Store {
     pub fn block_by_hash(&self, hash: &[u8; 32]) -> Result<Option<Block>, StorageError> {
         let cf = self.cf(Column::Blocks)?;
         let key = block_key(hash);
-        let value = match self.db.get_cf(cf, key)? {
+        let value = match self.db.get_cf(&cf, key)? {
             Some(data) => data,
             None => return Ok(None),
         };
@@ -165,7 +241,7 @@ impl Store {
 
     pub fn load_blocks(&self) -> Result<Vec<Block>, StorageError> {
         let cf_headers = self.cf(Column::Headers)?;
-        let iter = self.db.iterator_cf(cf_headers, IteratorMode::Start);
+        let iter = self.db.iterator_cf(&cf_headers, IteratorMode::Start);
         let mut blocks = Vec::new();
         for entry in iter {
             let (key, value) = entry?;
@@ -187,7 +263,7 @@ impl Store {
 
     pub fn utxo_len(&self) -> Result<usize, StorageError> {
         let cf = self.cf(Column::Utxo)?;
-        let iter = self.db.iterator_cf(cf, IteratorMode::Start);
+        let iter = self.db.iterator_cf(&cf, IteratorMode::Start);
         let mut count = 0usize;
         for entry in iter {
             entry?;
@@ -215,10 +291,10 @@ impl Store {
         let cf_blocks = self.cf(Column::Blocks)?;
         let mut batch = WriteBatch::default();
         for h in (height + 1)..=tip.height {
-            batch.delete_cf(cf_headers, header_key(h));
+            batch.delete_cf(&cf_headers, header_key(h));
             if let Some(header) = self.header_by_height(h)? {
                 let hash = pow_hash(&header);
-                batch.delete_cf(cf_blocks, block_key(&hash));
+                batch.delete_cf(&cf_blocks, block_key(&hash));
             }
         }
         let mut opts = WriteOptions::default();
@@ -241,7 +317,7 @@ impl Store {
         let bytes = encode_height(value);
         let mut opts = WriteOptions::default();
         opts.disable_wal(false);
-        self.db.put_cf_opt(cf_meta, &key, bytes, &opts)?;
+        self.db.put_cf_opt(&cf_meta, &key, bytes, &opts)?;
         Ok(())
     }
 
@@ -250,7 +326,7 @@ impl Store {
         let key = meta_key(META_COMPACT_INDEX);
         let mut opts = WriteOptions::default();
         opts.disable_wal(false);
-        self.db.delete_cf_opt(cf_meta, &key, &opts)?;
+        self.db.delete_cf_opt(&cf_meta, &key, &opts)?;
         Ok(())
     }
 
@@ -259,7 +335,7 @@ impl Store {
         let key = meta_key(META_COMPACT_INDEX);
         let raw = self
             .db
-            .get_cf(cf_meta, &key)?
+            .get_cf(&cf_meta, &key)?
             .unwrap_or_else(|| encode_height(0).to_vec());
         decode_height(&raw)
     }
@@ -277,11 +353,20 @@ impl Store {
             .unwrap_or(0))
     }
 
+    /// Returns the approximate total size of all SST files in bytes.
+    /// This includes all column families and live data on disk.
+    pub fn total_db_size(&self) -> Result<u64, StorageError> {
+        Ok(self
+            .db
+            .property_int_value("rocksdb.total-sst-files-size")?
+            .unwrap_or(0))
+    }
+
     pub(crate) fn db(&self) -> Arc<DB> {
         self.db.clone()
     }
 
-    pub(crate) fn cf(&self, column: Column) -> Result<&ColumnFamily, StorageError> {
+    pub(crate) fn cf(&self, column: Column) -> Result<Arc<BoundColumnFamily<'_>>, StorageError> {
         self.db
             .cf_handle(column.name())
             .ok_or(StorageError::MissingColumn(column.name()))
@@ -290,14 +375,14 @@ impl Store {
     fn ensure_bootstrap(&self) -> Result<(), StorageError> {
         let cf_meta = self.cf(Column::Meta)?;
         let version_key = meta_key(schema::META_VERSION);
-        if self.db.get_cf(cf_meta, &version_key)?.is_none() {
+        if self.db.get_cf(&cf_meta, &version_key)?.is_none() {
             let mut opts = WriteOptions::default();
             opts.disable_wal(false);
             self.db
-                .put_cf_opt(cf_meta, &version_key, SCHEMA_VERSION.to_be_bytes(), &opts)?;
+                .put_cf_opt(&cf_meta, &version_key, SCHEMA_VERSION.to_be_bytes(), &opts)?;
         }
         let compact_key = meta_key(META_COMPACT_INDEX);
-        if self.db.get_cf(cf_meta, &compact_key)?.is_none() {
+        if self.db.get_cf(&cf_meta, &compact_key)?.is_none() {
             self.set_compact_index(0)?;
         }
         Ok(())
@@ -305,11 +390,11 @@ impl Store {
 
     fn clear_cf(&self, column: Column) -> Result<(), StorageError> {
         let cf = self.cf(column)?;
-        let iter = self.db.iterator_cf(cf, IteratorMode::Start);
+        let iter = self.db.iterator_cf(&cf, IteratorMode::Start);
         let mut batch = WriteBatch::default();
         for entry in iter {
             let (key, _) = entry?;
-            batch.delete_cf(cf, key);
+            batch.delete_cf(&cf, key);
         }
         let mut opts = WriteOptions::default();
         opts.disable_wal(false);

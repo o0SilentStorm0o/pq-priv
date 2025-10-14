@@ -720,6 +720,11 @@ impl ChainState {
             running_compactions: running,
         }
     }
+
+    /// Returns a reference to the underlying RocksDB store for metrics collection
+    pub fn store(&self) -> &Store {
+        &self.store
+    }
 }
 
 pub struct ChainMetrics {

@@ -57,9 +57,10 @@ impl BlockBatch {
         let cf_headers = self.store.cf(Column::Headers)?;
         let cf_blocks = self.store.cf(Column::Blocks)?;
         self.writes
-            .put_cf(cf_headers, header_key(height), header_bytes);
+            .put_cf(&cf_headers, header_key(height), header_bytes);
         let hash = pow_hash(&block.header);
-        self.writes.put_cf(cf_blocks, block_key(&hash), block_bytes);
+        self.writes
+            .put_cf(&cf_blocks, block_key(&hash), block_bytes);
         Ok(())
     }
 
@@ -67,7 +68,7 @@ impl BlockBatch {
         let cf_meta = self.store.cf(Column::Meta)?;
         let meta = TipMetadata::from_info(tip);
         let bytes = serde_json::to_vec(&meta)?;
-        self.writes.put_cf(cf_meta, meta_key(META_TIP), bytes);
+        self.writes.put_cf(&cf_meta, meta_key(META_TIP), bytes);
         Ok(())
     }
 
@@ -76,10 +77,15 @@ impl BlockBatch {
             let cf_meta = self.store.cf(Column::Meta)?;
             let bytes = encode_height(self.compact_next);
             self.writes
-                .put_cf(cf_meta, meta_key(META_COMPACT_INDEX), bytes);
+                .put_cf(&cf_meta, meta_key(META_COMPACT_INDEX), bytes);
         }
         let mut opts = WriteOptions::default();
         opts.disable_wal(false);
+
+        // Measure write batch latency for metrics
+        #[cfg(feature = "metrics")]
+        let _timer = crate::metrics::WriteBatchTimer::start();
+
         self.store.db().write_opt(self.writes, &opts)?;
         Ok(())
     }
@@ -93,7 +99,7 @@ impl BlockBatch {
         }
         let cf = self.store.cf(Column::Utxo)?;
         let key = schema::utxo_key(&outpoint.txid, outpoint.index);
-        let value = match self.store.db().get_cf(cf, key)? {
+        let value = match self.store.db().get_cf(&cf, key)? {
             Some(raw) => raw,
             None => return Ok(None),
         };
@@ -109,7 +115,7 @@ impl BlockBatch {
         let cf = self.store.cf(Column::Utxo)?;
         let key = schema::utxo_key(&outpoint.txid, outpoint.index);
         let bytes = to_vec_cbor(&record)?;
-        self.writes.put_cf(cf, key, bytes);
+        self.writes.put_cf(&cf, key, bytes);
         self.utxos.insert(outpoint, UtxoOverlay::Insert(record));
         Ok(())
     }
@@ -122,7 +128,7 @@ impl BlockBatch {
                     *entry = UtxoOverlay::Delete;
                     let cf = self.store.cf(Column::Utxo)?;
                     let key = schema::utxo_key(&outpoint.txid, outpoint.index);
-                    self.writes.delete_cf(cf, key);
+                    self.writes.delete_cf(&cf, key);
                     return Ok(Some(cloned));
                 }
                 UtxoOverlay::Delete => return Ok(None),
@@ -132,7 +138,7 @@ impl BlockBatch {
         if record.is_some() {
             let cf = self.store.cf(Column::Utxo)?;
             let key = schema::utxo_key(&outpoint.txid, outpoint.index);
-            self.writes.delete_cf(cf, key);
+            self.writes.delete_cf(&cf, key);
             self.utxos.insert(*outpoint, UtxoOverlay::Delete);
         }
         Ok(record)
@@ -147,7 +153,7 @@ impl BlockBatch {
         }
         let cf = self.store.cf(Column::LinkTag)?;
         let key = linktag_key(tag);
-        let present = self.store.db().get_cf(cf, key)?.is_some();
+        let present = self.store.db().get_cf(&cf, key)?.is_some();
         Ok(present)
     }
 
@@ -155,7 +161,7 @@ impl BlockBatch {
         if self.link_tags.insert(tag) {
             self.cleared_tags.remove(&tag);
             let cf = self.store.cf(Column::LinkTag)?;
-            self.writes.put_cf(cf, linktag_key(&tag), [1u8]);
+            self.writes.put_cf(&cf, linktag_key(&tag), [1u8]);
         }
         Ok(())
     }
@@ -164,7 +170,7 @@ impl BlockBatch {
         self.link_tags.remove(tag);
         self.cleared_tags.insert(*tag);
         let cf = self.store.cf(Column::LinkTag)?;
-        self.writes.delete_cf(cf, linktag_key(tag));
+        self.writes.delete_cf(&cf, linktag_key(tag));
         Ok(())
     }
 }
