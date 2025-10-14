@@ -1,0 +1,11 @@
+﻿Checking for known CVEs in key dependencies...
+
+=== Dependency Versions ===
+rocksdb: 0.22.0
+librocksdb-sys: 0.16.0+8.10.0 (RocksDB C++ 8.10.0)
+zstd-sys: 2.0.16+zstd.1.5.7 (Zstandard 1.5.7)
+lz4-sys: 1.11.1+lz4-1.10.0 (LZ4 1.10.0)
+libz-sys: 1.1.22 (zlib)
+bzip2-sys: (via librocksdb-sys)
+
+=== RustSec Advisory Check ===

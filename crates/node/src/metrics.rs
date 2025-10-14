@@ -10,27 +10,18 @@ use std::sync::Arc;
 pub struct StorageMetrics {
     /// Total database size in bytes (gauge).
     db_size_bytes: Arc<Mutex<u64>>,
-
-    /// WAL sync operations counter.
-    wal_synced_total: Arc<Mutex<u64>>,
 }
 
 impl StorageMetrics {
     pub fn new() -> Self {
         Self {
             db_size_bytes: Arc::new(Mutex::new(0)),
-            wal_synced_total: Arc::new(Mutex::new(0)),
         }
     }
 
     /// Update database size gauge.
     pub fn set_db_size_bytes(&self, size: u64) {
         *self.db_size_bytes.lock() = size;
-    }
-
-    /// Increment WAL sync counter.
-    pub fn increment_wal_synced(&self) {
-        *self.wal_synced_total.lock() += 1;
     }
 
     /// Generate Prometheus exposition format output.
@@ -86,8 +77,12 @@ impl StorageMetrics {
         }
 
         // WAL sync counter
-        let wal_synced = *self.wal_synced_total.lock();
-        output.push_str("# HELP node_db_wal_synced_total Number of WAL sync operations\n");
+        // Note: Each write batch commit triggers a WAL sync, so we use the histogram count
+        let wal_synced = {
+            let storage_buckets = storage::metrics::get_histogram_buckets();
+            storage_buckets.iter().sum::<u64>()
+        };
+        output.push_str("# HELP node_db_wal_synced_total Number of WAL sync operations (write batch commits)\n");
         output.push_str("# TYPE node_db_wal_synced_total counter\n");
         output.push_str(&format!("node_db_wal_synced_total {}\n", wal_synced));
 
@@ -128,13 +123,12 @@ mod tests {
 
     #[test]
     fn test_wal_counter() {
+        // WAL counter is derived from write_batch histogram count
+        // This test verifies the metric appears in output
         let metrics = StorageMetrics::new();
 
-        metrics.increment_wal_synced();
-        metrics.increment_wal_synced();
-        metrics.increment_wal_synced();
-
         let output = metrics.to_prometheus();
-        assert!(output.contains("node_db_wal_synced_total 3"));
+        assert!(output.contains("node_db_wal_synced_total"));
+        assert!(output.contains("# TYPE node_db_wal_synced_total counter"));
     }
 }

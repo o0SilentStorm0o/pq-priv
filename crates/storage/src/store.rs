@@ -353,6 +353,15 @@ impl Store {
             .unwrap_or(0))
     }
 
+    /// Returns the approximate total size of all SST files in bytes.
+    /// This includes all column families and live data on disk.
+    pub fn total_db_size(&self) -> Result<u64, StorageError> {
+        Ok(self
+            .db
+            .property_int_value("rocksdb.total-sst-files-size")?
+            .unwrap_or(0))
+    }
+
     pub(crate) fn db(&self) -> Arc<DB> {
         self.db.clone()
     }
