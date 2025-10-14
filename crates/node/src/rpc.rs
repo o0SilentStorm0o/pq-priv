@@ -78,18 +78,18 @@ impl RpcContext {
 
     fn render_metrics(&self) -> String {
         let snapshot = self.metrics_snapshot();
-        
+
         // Update storage metrics from actual RocksDB state
         {
             let guard = self.chain.lock();
             let store = guard.store();
-            
+
             // Update DB size from actual RocksDB
             if let Ok(size) = store.total_db_size() {
                 self.storage_metrics.set_db_size_bytes(size);
             }
         }
-        
+
         let mut body = String::new();
         let _ = writeln!(body, "pqpriv_peers {}", snapshot.peer_count);
         let _ = writeln!(body, "pqpriv_tip_height {}", snapshot.chain.height);

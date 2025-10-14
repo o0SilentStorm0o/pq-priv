@@ -82,7 +82,9 @@ impl StorageMetrics {
             let storage_buckets = storage::metrics::get_histogram_buckets();
             storage_buckets.iter().sum::<u64>()
         };
-        output.push_str("# HELP node_db_wal_synced_total Number of WAL sync operations (write batch commits)\n");
+        output.push_str(
+            "# HELP node_db_wal_synced_total Number of WAL sync operations (write batch commits)\n",
+        );
         output.push_str("# TYPE node_db_wal_synced_total counter\n");
         output.push_str(&format!("node_db_wal_synced_total {}\n", wal_synced));
 
