@@ -39,14 +39,14 @@ impl Drop for WriteBatchTimer {
     fn drop(&mut self) {
         let elapsed_us = self.start.elapsed().as_micros() as u64;
         let bucket_idx = match elapsed_us {
-            0..=999 => 0,           // <1ms
-            1000..=4999 => 1,       // 1-5ms
-            5000..=9999 => 2,       // 5-10ms
-            10000..=49999 => 3,     // 10-50ms
-            50000..=99999 => 4,     // 50-100ms
-            100000..=499999 => 5,   // 100-500ms
-            500000..=999999 => 6,   // 500-1000ms
-            _ => 7,                 // >1000ms
+            0..=999 => 0,         // <1ms
+            1000..=4999 => 1,     // 1-5ms
+            5000..=9999 => 2,     // 5-10ms
+            10000..=49999 => 3,   // 10-50ms
+            50000..=99999 => 4,   // 50-100ms
+            100000..=499999 => 5, // 100-500ms
+            500000..=999999 => 6, // 500-1000ms
+            _ => 7,               // >1000ms
         };
         WRITE_BATCH_BUCKETS[bucket_idx].fetch_add(1, Ordering::Relaxed);
     }
@@ -106,14 +106,14 @@ mod tests {
 
         // Test each bucket boundary
         let test_cases = vec![
-            (500, 0),      // 0.5ms -> bucket 0
-            (1500, 1),     // 1.5ms -> bucket 1
-            (7000, 2),     // 7ms -> bucket 2
-            (25000, 3),    // 25ms -> bucket 3
-            (75000, 4),    // 75ms -> bucket 4
-            (200000, 5),   // 200ms -> bucket 5
-            (750000, 6),   // 750ms -> bucket 6
-            (2000000, 7),  // 2000ms -> bucket 7
+            (500, 0),     // 0.5ms -> bucket 0
+            (1500, 1),    // 1.5ms -> bucket 1
+            (7000, 2),    // 7ms -> bucket 2
+            (25000, 3),   // 25ms -> bucket 3
+            (75000, 4),   // 75ms -> bucket 4
+            (200000, 5),  // 200ms -> bucket 5
+            (750000, 6),  // 750ms -> bucket 6
+            (2000000, 7), // 2000ms -> bucket 7
         ];
 
         for (us, expected_bucket) in test_cases {
@@ -121,7 +121,9 @@ mod tests {
                 bucket.store(0, Ordering::Relaxed);
             }
 
-            let timer = WriteBatchTimer { start: Instant::now() };
+            let timer = WriteBatchTimer {
+                start: Instant::now(),
+            };
             std::mem::forget(timer); // Don't record yet
 
             // Manually trigger bucket logic

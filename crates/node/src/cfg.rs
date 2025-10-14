@@ -59,18 +59,18 @@ impl NodeConfig {
         if let Some(db) = raw.db {
             // Apply TOML config
             if let Some(write_buffer_mb) = db.write_buffer_mb {
-                config.db_tuning.write_buffer_mb = write_buffer_mb;
+                config.db_tuning.write_buffer_mb = Some(write_buffer_mb as u64);
             }
             if let Some(block_cache_mb) = db.block_cache_mb {
-                config.db_tuning.block_cache_mb = block_cache_mb;
+                config.db_tuning.block_cache_mb = Some(block_cache_mb as u64);
             }
             if let Some(compression) = db.compression {
-                config.db_tuning.compression = compression;
+                config.db_tuning.compression = Some(compression);
             }
         }
         // Apply environment variable overrides (highest priority)
         config.db_tuning = DbTuning::from_env(config.db_tuning);
-        
+
         if let Some(path) = raw.snapshots_path {
             config.snapshots_path = path;
         }
@@ -152,7 +152,7 @@ struct RawDbConfig {
     compression: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Default)]]
+#[derive(Debug, Deserialize, Default)]
 #[serde(default)]
 struct RawTxPoolConfig {
     max_bytes: Option<usize>,

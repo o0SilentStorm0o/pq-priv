@@ -8,7 +8,7 @@ use codec::from_slice_cbor;
 use consensus::{Block, BlockHeader, block_work, pow_hash};
 use rocksdb::checkpoint::Checkpoint;
 use rocksdb::{
-    BlockBasedOptions, Cache, ColumnFamily, ColumnFamilyDescriptor, DB, DBCompressionType,
+    BlockBasedOptions, BoundColumnFamily, Cache, ColumnFamilyDescriptor, DB, DBCompressionType,
     IteratorMode, Options, WriteBatch, WriteOptions,
 };
 use serde::{Deserialize, Serialize};
@@ -108,14 +108,14 @@ impl Store {
 
         // Pipelined writes
         if tuning.enable_pipelined_write() {
-            opts.enable_pipelined_write(true);
+            opts.set_enable_pipelined_write(true);
         }
 
         // Read-ahead
         if tuning.readahead_mb() > 0 {
             opts.set_advise_random_on_open(false);
             opts.set_allow_concurrent_memtable_write(true);
-            opts.set_compaction_readahead_size(tuning.readahead_mb() * 1024 * 1024);
+            opts.set_compaction_readahead_size((tuning.readahead_mb() * 1024 * 1024) as usize);
         }
 
         // Block-based table options
@@ -141,7 +141,7 @@ impl Store {
         tuning: DbTuning,
     ) -> Result<Self, StorageError> {
         let (mut opts, block_opts) = Self::build_db_options(&tuning);
-        
+
         opts.set_block_based_table_factory(&block_opts);
 
         let cf_descriptors = vec![
@@ -151,7 +151,7 @@ impl Store {
             ColumnFamilyDescriptor::new(schema::CF_LINKTAG, opts.clone()),
             ColumnFamilyDescriptor::new(schema::CF_META, opts.clone()),
         ];
-        
+
         let db = DB::open_cf_descriptors(&opts, path, cf_descriptors)?;
         let store = Self { db: Arc::new(db) };
         store.ensure_bootstrap()?;
@@ -169,7 +169,7 @@ impl Store {
     pub fn tip(&self) -> Result<Option<TipInfo>, StorageError> {
         let cf_meta = self.cf(Column::Meta)?;
         let key = meta_key(META_TIP);
-        let data = match self.db.get_cf(cf_meta, &key)? {
+        let data = match self.db.get_cf(&cf_meta, &key)? {
             Some(bytes) => bytes,
             None => return Ok(None),
         };
@@ -184,7 +184,7 @@ impl Store {
         let data = serde_json::to_vec(&meta)?;
         let mut opts = WriteOptions::default();
         opts.disable_wal(false);
-        self.db.put_cf_opt(cf_meta, &key, data, &opts)?;
+        self.db.put_cf_opt(&cf_meta, &key, data, &opts)?;
         Ok(())
     }
 
@@ -193,14 +193,14 @@ impl Store {
         let key = meta_key(META_TIP);
         let mut opts = WriteOptions::default();
         opts.disable_wal(false);
-        self.db.delete_cf_opt(cf_meta, &key, &opts)?;
+        self.db.delete_cf_opt(&cf_meta, &key, &opts)?;
         Ok(())
     }
 
     pub fn header_by_height(&self, height: u64) -> Result<Option<BlockHeader>, StorageError> {
         let cf = self.cf(Column::Headers)?;
         let key = header_key(height);
-        let value = match self.db.get_cf(cf, key)? {
+        let value = match self.db.get_cf(&cf, key)? {
             Some(data) => data,
             None => return Ok(None),
         };
@@ -211,7 +211,7 @@ impl Store {
     pub fn block_by_hash(&self, hash: &[u8; 32]) -> Result<Option<Block>, StorageError> {
         let cf = self.cf(Column::Blocks)?;
         let key = block_key(hash);
-        let value = match self.db.get_cf(cf, key)? {
+        let value = match self.db.get_cf(&cf, key)? {
             Some(data) => data,
             None => return Ok(None),
         };
@@ -230,7 +230,7 @@ impl Store {
 
     pub fn load_blocks(&self) -> Result<Vec<Block>, StorageError> {
         let cf_headers = self.cf(Column::Headers)?;
-        let iter = self.db.iterator_cf(cf_headers, IteratorMode::Start);
+        let iter = self.db.iterator_cf(&cf_headers, IteratorMode::Start);
         let mut blocks = Vec::new();
         for entry in iter {
             let (key, value) = entry?;
@@ -252,7 +252,7 @@ impl Store {
 
     pub fn utxo_len(&self) -> Result<usize, StorageError> {
         let cf = self.cf(Column::Utxo)?;
-        let iter = self.db.iterator_cf(cf, IteratorMode::Start);
+        let iter = self.db.iterator_cf(&cf, IteratorMode::Start);
         let mut count = 0usize;
         for entry in iter {
             entry?;
@@ -280,10 +280,10 @@ impl Store {
         let cf_blocks = self.cf(Column::Blocks)?;
         let mut batch = WriteBatch::default();
         for h in (height + 1)..=tip.height {
-            batch.delete_cf(cf_headers, header_key(h));
+            batch.delete_cf(&cf_headers, header_key(h));
             if let Some(header) = self.header_by_height(h)? {
                 let hash = pow_hash(&header);
-                batch.delete_cf(cf_blocks, block_key(&hash));
+                batch.delete_cf(&cf_blocks, block_key(&hash));
             }
         }
         let mut opts = WriteOptions::default();
@@ -306,7 +306,7 @@ impl Store {
         let bytes = encode_height(value);
         let mut opts = WriteOptions::default();
         opts.disable_wal(false);
-        self.db.put_cf_opt(cf_meta, &key, bytes, &opts)?;
+        self.db.put_cf_opt(&cf_meta, &key, bytes, &opts)?;
         Ok(())
     }
 
@@ -315,7 +315,7 @@ impl Store {
         let key = meta_key(META_COMPACT_INDEX);
         let mut opts = WriteOptions::default();
         opts.disable_wal(false);
-        self.db.delete_cf_opt(cf_meta, &key, &opts)?;
+        self.db.delete_cf_opt(&cf_meta, &key, &opts)?;
         Ok(())
     }
 
@@ -324,7 +324,7 @@ impl Store {
         let key = meta_key(META_COMPACT_INDEX);
         let raw = self
             .db
-            .get_cf(cf_meta, &key)?
+            .get_cf(&cf_meta, &key)?
             .unwrap_or_else(|| encode_height(0).to_vec());
         decode_height(&raw)
     }
@@ -346,7 +346,7 @@ impl Store {
         self.db.clone()
     }
 
-    pub(crate) fn cf(&self, column: Column) -> Result<&ColumnFamily, StorageError> {
+    pub(crate) fn cf(&self, column: Column) -> Result<Arc<BoundColumnFamily<'_>>, StorageError> {
         self.db
             .cf_handle(column.name())
             .ok_or(StorageError::MissingColumn(column.name()))
@@ -355,14 +355,14 @@ impl Store {
     fn ensure_bootstrap(&self) -> Result<(), StorageError> {
         let cf_meta = self.cf(Column::Meta)?;
         let version_key = meta_key(schema::META_VERSION);
-        if self.db.get_cf(cf_meta, &version_key)?.is_none() {
+        if self.db.get_cf(&cf_meta, &version_key)?.is_none() {
             let mut opts = WriteOptions::default();
             opts.disable_wal(false);
             self.db
-                .put_cf_opt(cf_meta, &version_key, SCHEMA_VERSION.to_be_bytes(), &opts)?;
+                .put_cf_opt(&cf_meta, &version_key, SCHEMA_VERSION.to_be_bytes(), &opts)?;
         }
         let compact_key = meta_key(META_COMPACT_INDEX);
-        if self.db.get_cf(cf_meta, &compact_key)?.is_none() {
+        if self.db.get_cf(&cf_meta, &compact_key)?.is_none() {
             self.set_compact_index(0)?;
         }
         Ok(())
@@ -370,11 +370,11 @@ impl Store {
 
     fn clear_cf(&self, column: Column) -> Result<(), StorageError> {
         let cf = self.cf(column)?;
-        let iter = self.db.iterator_cf(cf, IteratorMode::Start);
+        let iter = self.db.iterator_cf(&cf, IteratorMode::Start);
         let mut batch = WriteBatch::default();
         for entry in iter {
             let (key, _) = entry?;
-            batch.delete_cf(cf, key);
+            batch.delete_cf(&cf, key);
         }
         let mut opts = WriteOptions::default();
         opts.disable_wal(false);

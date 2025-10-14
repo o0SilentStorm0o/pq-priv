@@ -9,10 +9,7 @@ use tracing::{debug, error};
 use crate::metrics::StorageMetrics;
 
 /// Periodically update storage metrics (DB size, etc.).
-pub async fn run_storage_metrics_task(
-    data_dir: impl AsRef<Path>,
-    metrics: Arc<StorageMetrics>,
-) {
+pub async fn run_storage_metrics_task(data_dir: impl AsRef<Path>, metrics: Arc<StorageMetrics>) {
     let data_dir = data_dir.as_ref().to_path_buf();
     let mut ticker = interval(Duration::from_secs(30));
 
@@ -69,14 +66,17 @@ mod tests {
         // Create some test files
         let mut file1 = File::create(path.join("file1.txt")).unwrap();
         file1.write_all(b"hello").unwrap(); // 5 bytes
+        drop(file1); // Ensure file is closed and flushed
 
         let mut file2 = File::create(path.join("file2.txt")).unwrap();
         file2.write_all(b"world!!!").unwrap(); // 8 bytes
+        drop(file2);
 
         // Create subdirectory with file
         std::fs::create_dir(path.join("subdir")).unwrap();
         let mut file3 = File::create(path.join("subdir/file3.txt")).unwrap();
         file3.write_all(b"test").unwrap(); // 4 bytes
+        drop(file3);
 
         let total = calculate_dir_size(path).unwrap();
         assert_eq!(total, 5 + 8 + 4); // 17 bytes

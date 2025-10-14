@@ -113,10 +113,10 @@ impl RpcContext {
             "pqpriv_batch_commit_ms {:.3}",
             snapshot.chain.last_commit_ms
         );
-        
+
         // Storage metrics from RocksDB
         body.push_str(&self.storage_metrics.to_prometheus());
-        
+
         body
     }
 

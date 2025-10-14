@@ -116,28 +116,28 @@ impl DbTuning {
     pub fn from_env(mut self) -> Self {
         use std::env;
 
-        if let Ok(val) = env::var("PQPRIV_DB_MAX_BACKGROUND_JOBS") {
-            if let Ok(num) = val.parse() {
-                self.max_background_jobs = Some(num);
-            }
+        if let Ok(val) = env::var("PQPRIV_DB_MAX_BACKGROUND_JOBS")
+            && let Ok(num) = val.parse()
+        {
+            self.max_background_jobs = Some(num);
         }
-        if let Ok(val) = env::var("PQPRIV_DB_WRITE_BUFFER_MB") {
-            if let Ok(num) = val.parse() {
-                self.write_buffer_mb = Some(num);
-            }
+        if let Ok(val) = env::var("PQPRIV_DB_WRITE_BUFFER_MB")
+            && let Ok(num) = val.parse()
+        {
+            self.write_buffer_mb = Some(num);
         }
-        if let Ok(val) = env::var("PQPRIV_DB_TARGET_FILE_SIZE_MB") {
-            if let Ok(num) = val.parse() {
-                self.target_file_size_mb = Some(num);
-            }
+        if let Ok(val) = env::var("PQPRIV_DB_TARGET_FILE_SIZE_MB")
+            && let Ok(num) = val.parse()
+        {
+            self.target_file_size_mb = Some(num);
         }
         if let Ok(val) = env::var("PQPRIV_DB_COMPRESSION") {
             self.compression = Some(val);
         }
-        if let Ok(val) = env::var("PQPRIV_DB_BLOCK_CACHE_MB") {
-            if let Ok(num) = val.parse() {
-                self.block_cache_mb = Some(num);
-            }
+        if let Ok(val) = env::var("PQPRIV_DB_BLOCK_CACHE_MB")
+            && let Ok(num) = val.parse()
+        {
+            self.block_cache_mb = Some(num);
         }
         if let Ok(val) = env::var("PQPRIV_DB_WAL_ENABLED") {
             self.wal_enabled = Some(val == "true" || val == "1" || val == "on");

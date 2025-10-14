@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use codec::{from_slice_cbor, to_vec_cbor};
-use rocksdb::{ColumnFamily, DB};
+use rocksdb::{BoundColumnFamily, DB};
 use utxo::{OutPoint, OutputRecord, UtxoBackend, UtxoError};
 
 use crate::schema::{self, META_COMPACT_INDEX};
@@ -15,7 +15,7 @@ impl RocksUtxoStore {
         Self { db }
     }
 
-    fn cf(&self, name: &str) -> Result<&ColumnFamily, UtxoError> {
+    fn cf(&self, name: &str) -> Result<Arc<BoundColumnFamily<'_>>, UtxoError> {
         self.db
             .cf_handle(name)
             .ok_or_else(|| UtxoError::Backend(format!("missing column family {name}")))
@@ -34,7 +34,7 @@ impl UtxoBackend for RocksUtxoStore {
     fn get(&self, outpoint: &OutPoint) -> Result<Option<OutputRecord>, UtxoError> {
         let cf = self.cf(schema::CF_UTXO)?;
         let key = schema::utxo_key(&outpoint.txid, outpoint.index);
-        let value = match self.db.get_cf(cf, key).map_err(Self::db_err)? {
+        let value = match self.db.get_cf(&cf, key).map_err(Self::db_err)? {
             Some(raw) => raw,
             None => return Ok(None),
         };
@@ -46,18 +46,18 @@ impl UtxoBackend for RocksUtxoStore {
         let cf = self.cf(schema::CF_UTXO)?;
         let key = schema::utxo_key(&outpoint.txid, outpoint.index);
         let value = to_vec_cbor(&record).map_err(Self::codec_err)?;
-        self.db.put_cf(cf, key, value).map_err(Self::db_err)?;
+        self.db.put_cf(&cf, key, value).map_err(Self::db_err)?;
         Ok(())
     }
 
     fn remove(&mut self, outpoint: &OutPoint) -> Result<Option<OutputRecord>, UtxoError> {
         let cf = self.cf(schema::CF_UTXO)?;
         let key = schema::utxo_key(&outpoint.txid, outpoint.index);
-        let value = match self.db.get_cf(cf, key).map_err(Self::db_err)? {
+        let value = match self.db.get_cf(&cf, key).map_err(Self::db_err)? {
             Some(raw) => raw,
             None => return Ok(None),
         };
-        self.db.delete_cf(cf, key).map_err(Self::db_err)?;
+        self.db.delete_cf(&cf, key).map_err(Self::db_err)?;
         let record = from_slice_cbor::<OutputRecord>(&value).map_err(Self::codec_err)?;
         Ok(Some(record))
     }
@@ -65,21 +65,21 @@ impl UtxoBackend for RocksUtxoStore {
     fn contains_link_tag(&self, tag: &[u8; 32]) -> Result<bool, UtxoError> {
         let cf = self.cf(schema::CF_LINKTAG)?;
         let key = schema::linktag_key(tag);
-        let present = self.db.get_cf(cf, key).map_err(Self::db_err)?.is_some();
+        let present = self.db.get_cf(&cf, key).map_err(Self::db_err)?.is_some();
         Ok(present)
     }
 
     fn record_link_tag(&mut self, tag: [u8; 32]) -> Result<(), UtxoError> {
         let cf = self.cf(schema::CF_LINKTAG)?;
         let key = schema::linktag_key(&tag);
-        self.db.put_cf(cf, key, [1u8]).map_err(Self::db_err)?;
+        self.db.put_cf(&cf, key, [1u8]).map_err(Self::db_err)?;
         Ok(())
     }
 
     fn remove_link_tag(&mut self, tag: &[u8; 32]) -> Result<(), UtxoError> {
         let cf = self.cf(schema::CF_LINKTAG)?;
         let key = schema::linktag_key(tag);
-        self.db.delete_cf(cf, key).map_err(Self::db_err)?;
+        self.db.delete_cf(&cf, key).map_err(Self::db_err)?;
         Ok(())
     }
 
@@ -88,7 +88,7 @@ impl UtxoBackend for RocksUtxoStore {
         let key = schema::meta_key(META_COMPACT_INDEX);
         let current = self
             .db
-            .get_cf(cf_meta, &key)
+            .get_cf(&cf_meta, &key)
             .map_err(Self::db_err)?
             .map(|raw| schema::decode_height(&raw).map_err(|e| UtxoError::Backend(e.to_string())))
             .transpose()?
@@ -96,7 +96,7 @@ impl UtxoBackend for RocksUtxoStore {
         let next = current.saturating_add(1);
         let next_bytes = schema::encode_height(next);
         self.db
-            .put_cf(cf_meta, key, next_bytes)
+            .put_cf(&cf_meta, key, next_bytes)
             .map_err(Self::db_err)?;
         Ok(current)
     }
