@@ -129,19 +129,17 @@ impl SnapshotManager {
         );
 
         // Create temporary checkpoint directory
-        let temp_dir = self.snapshot_dir.join(format!("temp-{}", tip.height));
+        let temp_dir = self.snapshot_dir.join(format!("temp-{}-{}", tip.height, std::process::id()));
         if temp_dir.exists() {
             fs::remove_dir_all(&temp_dir).map_err(|e| {
                 StorageError::Corrupted(format!("failed to remove old temp dir: {}", e).into())
             })?;
         }
 
-        // Create RocksDB checkpoint
-        let checkpoint_dir = temp_dir.join("checkpoint");
-        fs::create_dir_all(&checkpoint_dir).map_err(|e| {
-            StorageError::Corrupted(format!("failed to create checkpoint dir: {}", e).into())
-        })?;
+        fs::create_dir_all(&temp_dir)?;
 
+        // Create RocksDB checkpoint (RocksDB will create checkpoint_dir itself)
+        let checkpoint_dir = temp_dir.join("checkpoint");
         store.create_checkpoint(&checkpoint_dir)?;
 
         // Create metadata
@@ -295,7 +293,12 @@ impl SnapshotManager {
         let checkpoint_dir = source_dir.join("checkpoint");
         tar.append_dir_all("checkpoint", &checkpoint_dir)?;
 
-        tar.finish()?;
+        // Finish tar builder and get encoder
+        let encoder = tar.into_inner()?;
+        
+        // Finish gzip encoder to flush all data
+        encoder.finish()?;
+
         Ok(())
     }
 
