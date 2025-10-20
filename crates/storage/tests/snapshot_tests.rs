@@ -189,8 +189,14 @@ fn test_snapshot_reject_symlink() {
 
         tar.append_path_with_name(&metadata_path, "metadata.json")
             .expect("failed to add metadata");
-        tar.append_dir_all("checkpoint", &checkpoint_dir)
-            .expect("failed to add checkpoint");
+
+        // Manually add checkpoint dir and its contents including symlink
+        tar.append_dir("checkpoint", &checkpoint_dir)
+            .expect("failed to add checkpoint dir");
+
+        // Add symlink explicitly (follow=false preserves symlink)
+        tar.append_path_with_name(&symlink_target, "checkpoint/symlink_file")
+            .expect("failed to add symlink");
 
         let encoder = tar.into_inner().expect("failed to finish tar");
         encoder.finish().expect("failed to finish gzip");
