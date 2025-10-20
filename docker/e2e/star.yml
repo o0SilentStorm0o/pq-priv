@@ -14,8 +14,6 @@
 #   - Low orphan rate (< 5%)
 #   - Minimal reorgs
 
-version: "3.8"
-
 services:
   hub:
     build:

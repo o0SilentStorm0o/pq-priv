@@ -24,8 +24,6 @@
 #   - Orphan pool size returns to 0
 #   - Bridge node syncs to height 250
 
-version: "3.8"
-
 services:
   iso_a:
     build:

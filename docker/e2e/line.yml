@@ -12,8 +12,6 @@
 # Verification:
 #   All nodes should have identical tip_height and tip_hash
 
-version: "3.8"
-
 services:
   node_a:
     build:
