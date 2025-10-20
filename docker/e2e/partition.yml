@@ -37,7 +37,8 @@ services:
       - ./data/partition/a:/data
       - ./config:/config:ro
     networks:
-      - partition_net
+      partition_net:
+        ipv4_address: 172.30.0.20
     ports:
       - "9021:9021"
       - "8560:8560"
@@ -59,7 +60,8 @@ services:
       - ./data/partition/b:/data
       - ./config:/config:ro
     networks:
-      - partition_net
+      partition_net:
+        ipv4_address: 172.30.0.21
     ports:
       - "9022:9022"
       - "8561:8561"
@@ -81,7 +83,8 @@ services:
       - ./data/partition/bridge:/data
       - ./config:/config:ro
     networks:
-      - partition_net
+      partition_net:
+        ipv4_address: 172.30.0.30
     ports:
       - "9023:9023"
       - "8562:8562"
@@ -96,3 +99,6 @@ services:
 networks:
   partition_net:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
