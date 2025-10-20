@@ -62,7 +62,11 @@ fn request_headers(chain: &Arc<Mutex<ChainState>>, network: &NetworkHandle) {
     if locator.is_empty() {
         return;
     }
-    debug!(len = locator.len(), "broadcasting locator for block sync");
+    let tip_height = {
+        let guard = chain.lock();
+        guard.height()
+    };
+    debug!(len = locator.len(), tip_height, "broadcasting GetHeaders for block sync");
     network.broadcast(NetMessage::GetHeaders {
         locator,
         stop_hash: None,

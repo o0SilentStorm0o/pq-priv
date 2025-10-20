@@ -40,6 +40,7 @@ impl Relay {
     }
 
     pub fn handle_inv(&self, peer_id: PeerId, inventory: Inventory) {
+        debug!(peer = %peer_id, items = inventory.items.len(), "received inv");
         let mut tx_requests = Vec::new();
         let mut block_candidates = Vec::new();
         {
@@ -62,6 +63,8 @@ impl Relay {
             }
         }
 
+        debug!(peer = %peer_id, tx_requests = tx_requests.len(), block_requests = block_candidates.len(), "prepared getdata");
+
         if !tx_requests.is_empty() {
             let _ = self.network.send(
                 peer_id,
@@ -74,6 +77,7 @@ impl Relay {
                 items: block_candidates,
             });
             if !filtered.items.is_empty() {
+                debug!(peer = %peer_id, blocks = filtered.items.len(), "sending getdata for blocks");
                 let _ = self.network.send(peer_id, NetMessage::GetData(filtered));
             }
         }
@@ -83,13 +87,16 @@ impl Relay {
         if headers.is_empty() {
             return;
         }
+        debug!(peer = %peer_id, count = headers.len(), "received headers");
         let requests = {
             let chain = self.chain.lock();
             self.sync.register_headers(&headers, &chain)
         };
         if requests.is_empty() {
+            debug!(peer = %peer_id, "no new blocks needed from headers");
             return;
         }
+        debug!(peer = %peer_id, count = requests.len(), "requesting blocks from headers");
         let items = requests.into_iter().map(InventoryItem::block).collect();
         let _ = self
             .network
@@ -124,12 +131,16 @@ impl Relay {
         locator: Vec<[u8; 32]>,
         stop: Option<[u8; 32]>,
     ) {
+        debug!(peer = %peer_id, locator_len = locator.len(), "received GetHeaders");
         let headers = {
             let chain = self.chain.lock();
             chain.headers_for_locator(&locator, stop.as_ref(), 2000)
         };
         if !headers.is_empty() {
+            debug!(peer = %peer_id, count = headers.len(), "sending Headers response");
             let _ = self.network.send(peer_id, NetMessage::Headers(headers));
+        } else {
+            debug!(peer = %peer_id, "no headers to send");
         }
     }
 
@@ -153,10 +164,13 @@ impl Relay {
     pub fn handle_block(&self, peer_id: PeerId, bytes: Vec<u8>) {
         match from_slice_cbor::<Block>(&bytes) {
             Ok(block) => {
+                let block_hash = consensus::pow_hash(&block.header);
+                debug!(peer = %peer_id, hash = ?block_hash, "received block");
                 let mut chain = self.chain.lock();
                 match self.sync.process_block(block, &mut chain) {
                     Ok(applied) => {
                         if !applied.is_empty() {
+                            debug!(applied = applied.len(), "applied blocks to chain");
                             let items = applied.into_iter().map(InventoryItem::block).collect();
                             self.network.broadcast_except(
                                 NetMessage::Inv(Inventory { items }),

@@ -253,7 +253,17 @@ impl ChainState {
         let prev_header = parent_entry.map(|entry| entry.header());
         validate_block(prev_header, &block, &self.params)?;
 
-        if parent_entry.is_some() {
+        let work = block_work(block.header.n_bits)?;
+        let cumulative = parent_entry
+            .map(|entry| entry.cumulative_work.clone() + &work)
+            .unwrap_or_else(|| work.clone());
+
+        // Determine if this block extends the active tip
+        let extends_active = self.active_tip == Some(parent_hash) || self.active_chain.is_empty();
+
+        // Only validate difficulty and timestamp for blocks extending the active chain
+        // Side chain blocks are validated during reorg if they become active
+        if extends_active && parent_entry.is_some() {
             let history = self.recent_headers(self.params.window);
             let expected_bits = next_difficulty(&self.params, &history)?;
             if block.header.n_bits != expected_bits {
@@ -265,12 +275,7 @@ impl ChainState {
             }
         }
 
-        let work = block_work(block.header.n_bits)?;
-        let cumulative = parent_entry
-            .map(|entry| entry.cumulative_work.clone() + &work)
-            .unwrap_or_else(|| work.clone());
-
-        if self.active_tip == Some(parent_hash) || self.active_chain.is_empty() {
+        if extends_active {
             self.apply_to_active(block, hash, parent_hash, height, cumulative)?;
         } else {
             self.insert_side_chain(block, hash, parent_hash, height, cumulative)?;
