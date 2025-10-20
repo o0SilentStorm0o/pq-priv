@@ -14,9 +14,7 @@
 
 services:
   node_a:
-    build:
-      context: ../..
-      dockerfile: Dockerfile.e2e
+    image: pqpriv:dev
     container_name: pq_line_a
     command:
       - "run"
@@ -39,9 +37,7 @@ services:
       retries: 3
 
   node_b:
-    build:
-      context: ../..
-      dockerfile: Dockerfile.e2e
+    image: pqpriv:dev
     container_name: pq_line_b
     command:
       - "run"
@@ -67,9 +63,7 @@ services:
       retries: 3
 
   node_c:
-    build:
-      context: ../..
-      dockerfile: Dockerfile.e2e
+    image: pqpriv:dev
     container_name: pq_line_c
     command:
       - "run"

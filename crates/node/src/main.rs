@@ -156,17 +156,31 @@ async fn run_node(args: RunArgs) -> anyhow::Result<()> {
 }
 
 fn coinbase_tx(height: u64) -> Tx {
-    let material = KeyMaterial::random();
+    // For E2E testing, use deterministic coinbase to ensure same merkle root
+    let material = if std::env::var("E2E_FIXED_GENESIS").is_ok() {
+        // Fixed entropy for E2E (all nodes use same keys)
+        KeyMaterial::from_entropy(&[42u8; 32])
+    } else {
+        KeyMaterial::random()
+    };
+    
     let scan = material.derive_scan_keypair(0);
     let spend = material.derive_spend_keypair(0);
     let stealth = build_stealth_blob(&scan.public, &spend.public, &height.to_le_bytes());
     let commitment = crypto::commitment(50, &height.to_le_bytes());
     let output = Output::new(stealth, commitment, OutputMeta::default());
+    
+    let witness_stamp = if std::env::var("E2E_FIXED_GENESIS").is_ok() {
+        1700000000u64 // Fixed timestamp for E2E
+    } else {
+        current_time()
+    };
+    
     TxBuilder::new()
         .add_output(output)
         .set_witness(Witness {
             range_proofs: Vec::new(),
-            stamp: current_time(),
+            stamp: witness_stamp,
             extra: Vec::new(),
         })
         .build()

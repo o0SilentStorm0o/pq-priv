@@ -1,0 +1,23 @@
+FROM debian:bookworm-slim
+
+# Install minimal runtime dependencies
+RUN apt-get update && apt-get install -y \
+    libssl3 \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy pre-built binary from build directory
+COPY node.exe /app/node
+
+RUN chmod +x /app/node
+
+# Expose P2P and RPC ports
+EXPOSE 9001 8545
+
+# Default config path
+ENV CONFIG_PATH=/config/default.toml
+
+ENTRYPOINT ["/app/node"]
