@@ -16,10 +16,10 @@
 
 services:
   hub:
-    build:
-      context: ../..
-      dockerfile: Dockerfile.e2e
+    image: pqpriv:dev
     container_name: pq_star_hub
+    environment:
+      - E2E_FIXED_GENESIS=1
     command:
       - "run"
       - "--config=/config/star_hub.toml"
@@ -38,10 +38,10 @@ services:
       retries: 3
 
   leaf1:
-    build:
-      context: ../..
-      dockerfile: Dockerfile.e2e
+    image: pqpriv:dev
     container_name: pq_star_leaf1
+    environment:
+      - E2E_FIXED_GENESIS=1
     command:
       - "run"
       - "--config=/config/star_leaf1.toml"
@@ -63,10 +63,10 @@ services:
       retries: 3
 
   leaf2:
-    build:
-      context: ../..
-      dockerfile: Dockerfile.e2e
+    image: pqpriv:dev
     container_name: pq_star_leaf2
+    environment:
+      - E2E_FIXED_GENESIS=1
     command:
       - "run"
       - "--config=/config/star_leaf2.toml"
@@ -88,10 +88,10 @@ services:
       retries: 3
 
   leaf3:
-    build:
-      context: ../..
-      dockerfile: Dockerfile.e2e
+    image: pqpriv:dev
     container_name: pq_star_leaf3
+    environment:
+      - E2E_FIXED_GENESIS=1
     command:
       - "run"
       - "--config=/config/star_leaf3.toml"

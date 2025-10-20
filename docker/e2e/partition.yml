@@ -26,10 +26,10 @@
 
 services:
   iso_a:
-    build:
-      context: ../..
-      dockerfile: Dockerfile.e2e
+    image: pqpriv:dev
     container_name: pq_partition_a
+    environment:
+      - E2E_FIXED_GENESIS=1
     command:
       - "run"
       - "--config=/config/partition_iso_a.toml"
@@ -48,10 +48,10 @@ services:
       retries: 3
 
   iso_b:
-    build:
-      context: ../..
-      dockerfile: Dockerfile.e2e
+    image: pqpriv:dev
     container_name: pq_partition_b
+    environment:
+      - E2E_FIXED_GENESIS=1
     command:
       - "run"
       - "--config=/config/partition_iso_b.toml"
@@ -70,10 +70,10 @@ services:
       retries: 3
 
   bridge:
-    build:
-      context: ../..
-      dockerfile: Dockerfile.e2e
+    image: pqpriv:dev
     container_name: pq_partition_bridge
+    environment:
+      - E2E_FIXED_GENESIS=1
     command:
       - "run"
       - "--config=/config/partition_bridge.toml"
