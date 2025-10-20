@@ -117,5 +117,6 @@ curl http://localhost:8645/chain/tip   # genesis block
 * [`spec/build.md`](./spec/build.md) – build & release handbook.
 * [`spec/README.md`](./spec/README.md) – specifications structure.
 * **[Storage Performance Tuning](./docs/perf/storage.md)** – RocksDB configuration and optimization guide.
+* **[Snapshot and Restore Guide](./docs/snapshots.md)** – Database backup/restore with security hardening.
 
 Contributions are welcome! Please read [CONTRIBUTING.md](./CONTRIBUTING.md) and [SECURITY.md](./SECURITY.md).

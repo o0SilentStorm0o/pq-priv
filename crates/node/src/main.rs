@@ -260,6 +260,7 @@ fn current_time() -> u64 {
 /// Create a snapshot of the current database state.
 async fn snapshot_now(db_path: PathBuf, snapshot_dir: PathBuf) -> anyhow::Result<()> {
     use storage::{DbTuning, SnapshotManager};
+    use std::time::Instant;
 
     info!(
         db_path = %db_path.display(),
@@ -268,6 +269,8 @@ async fn snapshot_now(db_path: PathBuf, snapshot_dir: PathBuf) -> anyhow::Result
     );
 
     fs::create_dir_all(&snapshot_dir)?;
+
+    let start = Instant::now();
 
     // Open database read-only
     let store = Store::open_with_tuning(&db_path, DbTuning::default())?;
@@ -279,11 +282,17 @@ async fn snapshot_now(db_path: PathBuf, snapshot_dir: PathBuf) -> anyhow::Result
     let manager = SnapshotManager::new(&snapshot_dir)?;
     let snapshot_path = manager.create_snapshot(&store, utxo_count)?;
 
+    let duration_ms = start.elapsed().as_millis() as u64;
+
     info!(
         path = %snapshot_path.display(),
         height = tip.height,
+        duration_ms = duration_ms,
         "snapshot created successfully"
     );
+
+    // Note: Metrics would be recorded here with:
+    // metrics.record_snapshot_success(tip.height, duration_ms);
 
     Ok(())
 }
@@ -291,12 +300,15 @@ async fn snapshot_now(db_path: PathBuf, snapshot_dir: PathBuf) -> anyhow::Result
 /// Restore database from a snapshot archive.
 async fn restore_snapshot(snapshot_path: PathBuf, target_dir: PathBuf) -> anyhow::Result<()> {
     use storage::SnapshotManager;
+    use std::time::Instant;
 
     info!(
         snapshot = %snapshot_path.display(),
         target = %target_dir.display(),
         "restoring database from snapshot"
     );
+
+    let start = Instant::now();
 
     let snapshot_dir = snapshot_path
         .parent()
@@ -305,10 +317,13 @@ async fn restore_snapshot(snapshot_path: PathBuf, target_dir: PathBuf) -> anyhow
     let manager = SnapshotManager::new(snapshot_dir)?;
     let metadata = manager.restore_snapshot(&snapshot_path, &target_dir)?;
 
+    let duration_ms = start.elapsed().as_millis() as u64;
+
     info!(
         height = metadata.height,
         tip_hash = %metadata.tip_hash,
         utxo_count = metadata.utxo_count,
+        duration_ms = duration_ms,
         "database restored successfully"
     );
 
@@ -334,6 +349,9 @@ async fn restore_snapshot(snapshot_path: PathBuf, target_dir: PathBuf) -> anyhow
     }
 
     info!("database verification successful");
+
+    // Note: Metrics would be recorded here with:
+    // metrics.record_restore_success();
 
     Ok(())
 }

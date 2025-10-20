@@ -10,18 +10,58 @@ use std::sync::Arc;
 pub struct StorageMetrics {
     /// Total database size in bytes (gauge).
     db_size_bytes: Arc<Mutex<u64>>,
+    /// Snapshot creation counter.
+    snapshot_count_total: Arc<Mutex<u64>>,
+    /// Snapshot creation failures counter.
+    snapshot_failures_total: Arc<Mutex<u64>>,
+    /// Last snapshot duration in milliseconds (gauge).
+    snapshot_last_duration_ms: Arc<Mutex<u64>>,
+    /// Last snapshot height (gauge).
+    snapshot_last_height: Arc<Mutex<u64>>,
+    /// Snapshot restore counter.
+    restore_count_total: Arc<Mutex<u64>>,
+    /// Snapshot restore failures counter.
+    restore_failures_total: Arc<Mutex<u64>>,
 }
 
 impl StorageMetrics {
     pub fn new() -> Self {
         Self {
             db_size_bytes: Arc::new(Mutex::new(0)),
+            snapshot_count_total: Arc::new(Mutex::new(0)),
+            snapshot_failures_total: Arc::new(Mutex::new(0)),
+            snapshot_last_duration_ms: Arc::new(Mutex::new(0)),
+            snapshot_last_height: Arc::new(Mutex::new(0)),
+            restore_count_total: Arc::new(Mutex::new(0)),
+            restore_failures_total: Arc::new(Mutex::new(0)),
         }
     }
 
     /// Update database size gauge.
     pub fn set_db_size_bytes(&self, size: u64) {
         *self.db_size_bytes.lock() = size;
+    }
+
+    /// Increment snapshot creation counter and update last snapshot metadata.
+    pub fn record_snapshot_success(&self, height: u64, duration_ms: u64) {
+        *self.snapshot_count_total.lock() += 1;
+        *self.snapshot_last_height.lock() = height;
+        *self.snapshot_last_duration_ms.lock() = duration_ms;
+    }
+
+    /// Increment snapshot failure counter.
+    pub fn record_snapshot_failure(&self) {
+        *self.snapshot_failures_total.lock() += 1;
+    }
+
+    /// Increment restore counter.
+    pub fn record_restore_success(&self) {
+        *self.restore_count_total.lock() += 1;
+    }
+
+    /// Increment restore failure counter.
+    pub fn record_restore_failure(&self) {
+        *self.restore_failures_total.lock() += 1;
     }
 
     /// Generate Prometheus exposition format output.
@@ -87,6 +127,52 @@ impl StorageMetrics {
         );
         output.push_str("# TYPE node_db_wal_synced_total counter\n");
         output.push_str(&format!("node_db_wal_synced_total {}\n", wal_synced));
+
+        // Snapshot metrics
+        let snapshot_count = *self.snapshot_count_total.lock();
+        let snapshot_failures = *self.snapshot_failures_total.lock();
+        let snapshot_duration = *self.snapshot_last_duration_ms.lock();
+        let snapshot_height = *self.snapshot_last_height.lock();
+        let restore_count = *self.restore_count_total.lock();
+        let restore_failures = *self.restore_failures_total.lock();
+
+        output.push_str(
+            "# HELP node_snapshot_count_total Number of successful snapshot creations\n",
+        );
+        output.push_str("# TYPE node_snapshot_count_total counter\n");
+        output.push_str(&format!("node_snapshot_count_total {}\n", snapshot_count));
+
+        output.push_str(
+            "# HELP node_snapshot_failures_total Number of failed snapshot creations\n",
+        );
+        output.push_str("# TYPE node_snapshot_failures_total counter\n");
+        output.push_str(&format!(
+            "node_snapshot_failures_total {}\n",
+            snapshot_failures
+        ));
+
+        output.push_str(
+            "# HELP node_snapshot_last_duration_ms Duration of last snapshot creation in milliseconds\n",
+        );
+        output.push_str("# TYPE node_snapshot_last_duration_ms gauge\n");
+        output.push_str(&format!(
+            "node_snapshot_last_duration_ms {}\n",
+            snapshot_duration
+        ));
+
+        output.push_str("# HELP node_snapshot_last_height Block height of last snapshot\n");
+        output.push_str("# TYPE node_snapshot_last_height gauge\n");
+        output.push_str(&format!("node_snapshot_last_height {}\n", snapshot_height));
+
+        output.push_str("# HELP node_restore_count_total Number of successful snapshot restores\n");
+        output.push_str("# TYPE node_restore_count_total counter\n");
+        output.push_str(&format!("node_restore_count_total {}\n", restore_count));
+
+        output.push_str(
+            "# HELP node_restore_failures_total Number of failed snapshot restores\n",
+        );
+        output.push_str("# TYPE node_restore_failures_total counter\n");
+        output.push_str(&format!("node_restore_failures_total {}\n", restore_failures));
 
         output
     }
