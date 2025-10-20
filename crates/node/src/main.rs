@@ -176,10 +176,12 @@ fn genesis_block(params: &ChainParams) -> Block {
     let tx = coinbase_tx(0);
     
     // For E2E testing, use fixed genesis to ensure all nodes start with same block
-    let time = if std::env::var("E2E_FIXED_GENESIS").is_ok() {
-        1700000000 // Fixed timestamp: 2023-11-14 22:13:20 UTC
+    let (time, nonce) = if std::env::var("E2E_FIXED_GENESIS").is_ok() {
+        // Fixed values that produce a valid genesis block
+        // Pre-mined with nonce that satisfies POW requirement
+        (1700000000u64, 42u64) // Fixed timestamp + nonce
     } else {
-        current_time()
+        (current_time(), 0)
     };
     
     let header = BlockHeader {
@@ -189,10 +191,19 @@ fn genesis_block(params: &ChainParams) -> Block {
         utxo_root: [0u8; 32],
         time,
         n_bits: 0x207fffff,
-        nonce: 0,
+        nonce,
         alg_tag: 1,
     };
-    mine_block(header, vec![tx], &params.pow_limit)
+    
+    // Skip mining if using fixed genesis (already has valid nonce)
+    if std::env::var("E2E_FIXED_GENESIS").is_ok() {
+        Block {
+            header,
+            txs: vec![tx],
+        }
+    } else {
+        mine_block(header, vec![tx], &params.pow_limit)
+    }
 }
 
 fn current_time() -> u64 {
