@@ -5,7 +5,10 @@ db_path = "/data"
 snapshots_path = "/data/snapshots"
 snapshot_interval = 100
 snapshot_keep = 3
-seeds = ["node_b:9002"]
+# Note: seeds require IP addresses, not hostnames
+# Docker Compose hostnames like "node_b:9002" are not supported
+# Nodes will discover each other via peer discovery
+# seeds = []
 
 [db]
 write_buffer_mb = 256

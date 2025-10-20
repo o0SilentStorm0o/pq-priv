@@ -5,7 +5,9 @@ db_path = "/data"
 snapshots_path = "/data/snapshots"
 snapshot_interval = 50
 snapshot_keep = 3
-seeds = ["iso_a:9021", "iso_b:9022"]
+# Note: seeds require IP addresses, not hostnames
+# Peer discovery will connect to available nodes
+# seeds = []
 
 [db]
 write_buffer_mb = 256
