@@ -9,7 +9,7 @@ default = ["metrics"]
 metrics = []
 
 [dependencies]
-rocksdb = { version = "0.22", default-features = false, features = ["lz4", "zstd", "multi-threaded-cf"] }
+rocksdb = { version = "0.24", default-features = false, features = ["lz4", "zstd", "multi-threaded-cf"] }
 codec = { path = "../codec", version = "0.1.0" }
 consensus = { path = "../consensus", version = "0.1.0" }
 utxo = { path = "../utxo", version = "0.1.0" }
