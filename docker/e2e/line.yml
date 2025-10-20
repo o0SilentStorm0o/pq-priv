@@ -21,6 +21,8 @@ services:
     command:
       - "run"
       - "--config=/config/line_a.toml"
+    environment:
+      - E2E_FIXED_GENESIS=1
     volumes:
       - ./data/line/a:/data
       - ./config:/config:ro
@@ -44,6 +46,8 @@ services:
     command:
       - "run"
       - "--config=/config/line_b.toml"
+    environment:
+      - E2E_FIXED_GENESIS=1
     volumes:
       - ./data/line/b:/data
       - ./config:/config:ro
@@ -70,6 +74,8 @@ services:
     command:
       - "run"
       - "--config=/config/line_c.toml"
+    environment:
+      - E2E_FIXED_GENESIS=1
     volumes:
       - ./data/line/c:/data
       - ./config:/config:ro

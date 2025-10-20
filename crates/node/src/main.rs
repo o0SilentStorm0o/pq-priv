@@ -174,12 +174,20 @@ fn coinbase_tx(height: u64) -> Tx {
 
 fn genesis_block(params: &ChainParams) -> Block {
     let tx = coinbase_tx(0);
+    
+    // For E2E testing, use fixed genesis to ensure all nodes start with same block
+    let time = if std::env::var("E2E_FIXED_GENESIS").is_ok() {
+        1700000000 // Fixed timestamp: 2023-11-14 22:13:20 UTC
+    } else {
+        current_time()
+    };
+    
     let header = BlockHeader {
         version: 1,
         prev_hash: [0u8; 32],
         merkle_root: merkle_root(std::slice::from_ref(&tx)),
         utxo_root: [0u8; 32],
-        time: current_time(),
+        time,
         n_bits: 0x207fffff,
         nonce: 0,
         alg_tag: 1,
