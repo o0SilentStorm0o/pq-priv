@@ -8,7 +8,7 @@ use tokio::sync::{broadcast, mpsc};
 use crate::error::NetworkError;
 use crate::types::{NetMessage, PeerId, Services, Version};
 
-const EVENT_CHANNEL_SIZE: usize = 128;
+const EVENT_CHANNEL_SIZE: usize = 2048;  // Increased from 128 to handle large sync bursts
 
 #[derive(Clone, Debug)]
 pub struct PeerSummary {
