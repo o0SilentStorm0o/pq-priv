@@ -5,9 +5,8 @@ db_path = "/data"
 snapshots_path = "/data/snapshots"
 snapshot_interval = 100
 snapshot_keep = 3
-# Note: seeds require IP addresses, not hostnames
-# Peer discovery will handle connections
-# seeds = []
+# Connect to hub at fixed IP
+seeds = ["172.29.0.10:9010"]
 
 [db]
 write_buffer_mb = 256

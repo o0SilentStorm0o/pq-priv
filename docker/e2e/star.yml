@@ -27,7 +27,8 @@ services:
       - ./data/star/hub:/data
       - ./config:/config:ro
     networks:
-      - star_net
+      star_net:
+        ipv4_address: 172.29.0.10
     ports:
       - "9010:9010"
       - "8550:8550"
@@ -110,3 +111,6 @@ services:
 networks:
   star_net:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.29.0.0/24
