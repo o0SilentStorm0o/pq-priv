@@ -25,7 +25,8 @@ services:
       - ./data/line/a:/data
       - ./config:/config:ro
     networks:
-      - line_net
+      line_net:
+        ipv4_address: 172.28.0.10
     ports:
       - "9001:9001"
       - "8545:8545"
@@ -47,7 +48,8 @@ services:
       - ./data/line/b:/data
       - ./config:/config:ro
     networks:
-      - line_net
+      line_net:
+        ipv4_address: 172.28.0.11
     ports:
       - "9002:9002"
       - "8546:8546"
@@ -72,7 +74,8 @@ services:
       - ./data/line/c:/data
       - ./config:/config:ro
     networks:
-      - line_net
+      line_net:
+        ipv4_address: 172.28.0.12
     ports:
       - "9003:9003"
       - "8547:8547"
@@ -83,3 +86,7 @@ services:
 networks:
   line_net:
     driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.0.0/16
