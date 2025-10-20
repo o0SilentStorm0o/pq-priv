@@ -191,7 +191,9 @@ fn test_snapshot_reject_symlink() {
             .expect("failed to add metadata");
         tar.append_dir_all("checkpoint", &checkpoint_dir)
             .expect("failed to add checkpoint");
-        tar.finish().expect("failed to finish archive");
+        
+        let encoder = tar.into_inner().expect("failed to finish tar");
+        encoder.finish().expect("failed to finish gzip");
 
         // Try to restore - should fail
         let restore_dir = TempDir::new().expect("failed to create restore dir");
