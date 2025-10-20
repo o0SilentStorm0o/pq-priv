@@ -179,11 +179,11 @@ impl DbTuning {
         }
 
         // Compression: only zstd, lz4, or none
-        if let Some(ref comp) = self.compression {
-            if comp != "zstd" && comp != "lz4" && comp != "none" {
-                warn!("compression='{}' is invalid, using 'zstd'", comp);
-                self.compression = Some("zstd".into());
-            }
+        if let Some(ref comp) = self.compression
+            && comp != "zstd" && comp != "lz4" && comp != "none"
+        {
+            warn!("compression='{}' is invalid, using 'zstd'", comp);
+            self.compression = Some("zstd".into());
         }
 
         // Target file size: 8 MB to 1024 MB (1 GB)
@@ -192,7 +192,10 @@ impl DbTuning {
                 warn!("target_file_size_mb={} is too low, clamping to 8 MB", val);
                 self.target_file_size_mb = Some(8);
             } else if val > 1024 {
-                warn!("target_file_size_mb={} is too high, clamping to 1024 MB", val);
+                warn!(
+                    "target_file_size_mb={} is too high, clamping to 1024 MB",
+                    val
+                );
                 self.target_file_size_mb = Some(1024);
             }
         }
@@ -298,60 +301,76 @@ mod tests {
 
     #[test]
     fn test_clamp_write_buffer_too_low() {
-        let mut tuning = DbTuning::default();
-        tuning.write_buffer_mb = Some(5); // Below minimum
+        let tuning = DbTuning {
+            write_buffer_mb: Some(5), // Below minimum
+            ..Default::default()
+        };
         let clamped = tuning.validate_and_clamp();
         assert_eq!(clamped.write_buffer_mb(), 16); // Clamped to minimum
     }
 
     #[test]
     fn test_clamp_write_buffer_too_high() {
-        let mut tuning = DbTuning::default();
-        tuning.write_buffer_mb = Some(3000); // Above maximum
+        let tuning = DbTuning {
+            write_buffer_mb: Some(3000), // Above maximum
+            ..Default::default()
+        };
         let clamped = tuning.validate_and_clamp();
         assert_eq!(clamped.write_buffer_mb(), 2048); // Clamped to maximum
     }
 
     #[test]
     fn test_clamp_block_cache() {
-        let mut tuning = DbTuning::default();
-        tuning.block_cache_mb = Some(32); // Too low
+        let tuning = DbTuning {
+            block_cache_mb: Some(32), // Too low
+            ..Default::default()
+        };
         let clamped = tuning.validate_and_clamp();
         assert_eq!(clamped.block_cache_mb(), 64); // Clamped to minimum
 
-        let mut tuning2 = DbTuning::default();
-        tuning2.block_cache_mb = Some(20000); // Too high
+        let tuning2 = DbTuning {
+            block_cache_mb: Some(20000), // Too high
+            ..Default::default()
+        };
         let clamped2 = tuning2.validate_and_clamp();
         assert_eq!(clamped2.block_cache_mb(), 16384); // Clamped to maximum
     }
 
     #[test]
     fn test_invalid_compression() {
-        let mut tuning = DbTuning::default();
-        tuning.compression = Some("bzip2".into()); // Invalid
+        let tuning = DbTuning {
+            compression: Some("bzip2".into()), // Invalid
+            ..Default::default()
+        };
         let clamped = tuning.validate_and_clamp();
         assert_eq!(clamped.compression(), "zstd"); // Reset to default
     }
 
     #[test]
     fn test_clamp_background_jobs() {
-        let mut tuning = DbTuning::default();
-        tuning.max_background_jobs = Some(0); // Too low
+        let tuning = DbTuning {
+            max_background_jobs: Some(0), // Too low
+            ..Default::default()
+        };
         let clamped = tuning.validate_and_clamp();
         assert_eq!(clamped.max_background_jobs(), 1); // Clamped to minimum
 
-        let mut tuning2 = DbTuning::default();
-        tuning2.max_background_jobs = Some(32); // Too high
+        let tuning2 = DbTuning {
+            max_background_jobs: Some(32), // Too high
+            ..Default::default()
+        };
         let clamped2 = tuning2.validate_and_clamp();
         assert_eq!(clamped2.max_background_jobs(), 16); // Clamped to maximum
     }
 
     #[test]
     fn test_valid_values_not_clamped() {
-        let mut tuning = DbTuning::default();
-        tuning.write_buffer_mb = Some(512); // Valid
-        tuning.block_cache_mb = Some(1024); // Valid
-        tuning.compression = Some("lz4".into()); // Valid
+        let tuning = DbTuning {
+            write_buffer_mb: Some(512), // Valid
+            block_cache_mb: Some(1024), // Valid
+            compression: Some("lz4".into()), // Valid
+            ..Default::default()
+        };
         let clamped = tuning.validate_and_clamp();
         assert_eq!(clamped.write_buffer_mb(), 512);
         assert_eq!(clamped.block_cache_mb(), 1024);

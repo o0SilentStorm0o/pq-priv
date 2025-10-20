@@ -5,10 +5,10 @@
 //!
 //! This prevents /metrics endpoint from blocking on disk I/O operations.
 
+use parking_lot::Mutex;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use parking_lot::Mutex;
 use tokio::time::interval;
 use tracing::{debug, error, warn};
 
@@ -41,7 +41,11 @@ pub async fn run_storage_metrics_task(
             let store = guard.store();
             match store.total_db_size() {
                 Ok(sst_size) => {
-                    debug!("SST size: {} bytes ({} MB)", sst_size, sst_size / 1024 / 1024);
+                    debug!(
+                        "SST size: {} bytes ({} MB)",
+                        sst_size,
+                        sst_size / 1024 / 1024
+                    );
                     metrics.set_sst_size_bytes(sst_size);
                 }
                 Err(e) => {
@@ -53,7 +57,11 @@ pub async fn run_storage_metrics_task(
         // 2. WAL size from filesystem scan (medium cost)
         match calculate_wal_size(&data_dir) {
             Ok(wal_size) => {
-                debug!("WAL size: {} bytes ({} MB)", wal_size, wal_size / 1024 / 1024);
+                debug!(
+                    "WAL size: {} bytes ({} MB)",
+                    wal_size,
+                    wal_size / 1024 / 1024
+                );
                 metrics.set_wal_size_bytes(wal_size);
             }
             Err(e) => {
@@ -64,7 +72,11 @@ pub async fn run_storage_metrics_task(
         // 3. Total directory size from filesystem scan (highest cost)
         match calculate_dir_size(&data_dir) {
             Ok(dir_size) => {
-                debug!("Total DB dir size: {} bytes ({} MB)", dir_size, dir_size / 1024 / 1024);
+                debug!(
+                    "Total DB dir size: {} bytes ({} MB)",
+                    dir_size,
+                    dir_size / 1024 / 1024
+                );
                 metrics.set_dir_size_bytes(dir_size);
             }
             Err(e) => {

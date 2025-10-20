@@ -15,8 +15,8 @@ use tx::{Output, OutputMeta, Tx, TxBuilder, Witness, build_stealth_blob};
 
 use node::{
     ChainState, NodeConfig, Relay, RpcContext, StorageMetrics, SyncManager, TxPool,
-    run_block_sync_task, run_chain_event_loop, run_peer_event_loop,
-    run_storage_metrics_task, spawn_rpc_server,
+    run_block_sync_task, run_chain_event_loop, run_peer_event_loop, run_storage_metrics_task,
+    spawn_rpc_server,
 };
 use p2p::{NodeAddr, P2pConfig, Services, Version, start_network};
 
@@ -64,15 +64,15 @@ struct RunArgs {
     /// Optional path to a TOML configuration file.
     #[arg(long)]
     config: Option<PathBuf>,
-    
+
     /// Directory where snapshots will be stored (overrides config file).
     #[arg(long)]
     snapshot_dir: Option<PathBuf>,
-    
+
     /// Automatic snapshot interval in blocks (0 = disabled, overrides config file).
     #[arg(long)]
     snapshot_interval: Option<u64>,
-    
+
     /// Number of snapshots to keep (overrides config file).
     #[arg(long)]
     snapshot_keep: Option<usize>,
@@ -112,7 +112,7 @@ async fn main() -> anyhow::Result<()> {
 
 async fn run_node(args: RunArgs) -> anyhow::Result<()> {
     let mut config = NodeConfig::load(args.config.as_deref())?;
-    
+
     // CLI overrides for snapshot configuration
     if let Some(snapshot_dir) = args.snapshot_dir {
         config.snapshots_path = snapshot_dir;
@@ -123,7 +123,7 @@ async fn run_node(args: RunArgs) -> anyhow::Result<()> {
     if let Some(keep) = args.snapshot_keep {
         config.snapshot_keep = keep;
     }
-    
+
     let params = ChainParams::default();
     let genesis = genesis_block(&params);
     info!(hash = ?pow_hash(&genesis.header), "Loaded genesis block");
@@ -243,19 +243,19 @@ fn coinbase_tx(height: u64) -> Tx {
     } else {
         KeyMaterial::random()
     };
-    
+
     let scan = material.derive_scan_keypair(0);
     let spend = material.derive_spend_keypair(0);
     let stealth = build_stealth_blob(&scan.public, &spend.public, &height.to_le_bytes());
     let commitment = crypto::commitment(50, &height.to_le_bytes());
     let output = Output::new(stealth, commitment, OutputMeta::default());
-    
+
     let witness_stamp = if std::env::var("E2E_FIXED_GENESIS").is_ok() {
         1700000000u64 // Fixed timestamp for E2E
     } else {
         current_time()
     };
-    
+
     TxBuilder::new()
         .add_output(output)
         .set_witness(Witness {
@@ -268,7 +268,7 @@ fn coinbase_tx(height: u64) -> Tx {
 
 fn genesis_block(params: &ChainParams) -> Block {
     let tx = coinbase_tx(0);
-    
+
     // For E2E testing, use fixed genesis to ensure all nodes start with same block
     let (time, nonce) = if std::env::var("E2E_FIXED_GENESIS").is_ok() {
         // Fixed values that produce a valid genesis block
@@ -277,7 +277,7 @@ fn genesis_block(params: &ChainParams) -> Block {
     } else {
         (current_time(), 0)
     };
-    
+
     let header = BlockHeader {
         version: 1,
         prev_hash: [0u8; 32],
@@ -288,7 +288,7 @@ fn genesis_block(params: &ChainParams) -> Block {
         nonce,
         alg_tag: 1,
     };
-    
+
     // Skip mining if using fixed genesis (already has valid nonce)
     if std::env::var("E2E_FIXED_GENESIS").is_ok() {
         Block {
@@ -336,7 +336,7 @@ fn validate_storage_path(path: &PathBuf) -> anyhow::Result<()> {
 
             let mode = metadata.permissions().mode();
             let perms = mode & 0o777;
-            
+
             // Warn if directory is world-readable or world-writable
             if perms & 0o007 != 0 {
                 warn!(
@@ -354,8 +354,8 @@ fn validate_storage_path(path: &PathBuf) -> anyhow::Result<()> {
 
 /// Create a snapshot of the current database state.
 async fn snapshot_now(db_path: PathBuf, snapshot_dir: PathBuf) -> anyhow::Result<()> {
-    use storage::{DbTuning, SnapshotManager};
     use std::time::Instant;
+    use storage::{DbTuning, SnapshotManager};
 
     info!(
         db_path = %db_path.display(),
@@ -369,9 +369,11 @@ async fn snapshot_now(db_path: PathBuf, snapshot_dir: PathBuf) -> anyhow::Result
 
     // Open database read-only
     let store = Store::open_with_tuning(&db_path, DbTuning::default())?;
-    
+
     // Get UTXO count (approximate via tip height for now)
-    let tip = store.tip()?.ok_or_else(|| anyhow::anyhow!("no tip found"))?;
+    let tip = store
+        .tip()?
+        .ok_or_else(|| anyhow::anyhow!("no tip found"))?;
     let utxo_count = tip.height; // TODO: implement actual UTXO counting
 
     let manager = SnapshotManager::new(&snapshot_dir)?;
@@ -394,8 +396,8 @@ async fn snapshot_now(db_path: PathBuf, snapshot_dir: PathBuf) -> anyhow::Result
 
 /// Restore database from a snapshot archive.
 async fn restore_snapshot(snapshot_path: PathBuf, target_dir: PathBuf) -> anyhow::Result<()> {
-    use storage::SnapshotManager;
     use std::time::Instant;
+    use storage::SnapshotManager;
 
     info!(
         snapshot = %snapshot_path.display(),
@@ -425,7 +427,9 @@ async fn restore_snapshot(snapshot_path: PathBuf, target_dir: PathBuf) -> anyhow
     // Verify restored database
     info!("verifying restored database...");
     let store = Store::open_with_tuning(&target_dir, storage::DbTuning::default())?;
-    let tip = store.tip()?.ok_or_else(|| anyhow::anyhow!("restored database has no tip"))?;
+    let tip = store
+        .tip()?
+        .ok_or_else(|| anyhow::anyhow!("restored database has no tip"))?;
 
     if hex::encode(tip.hash) != metadata.tip_hash {
         anyhow::bail!(
@@ -465,10 +469,10 @@ async fn verify_snapshot(snapshot_path: PathBuf) -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("snapshot path has no parent directory"))?;
 
     let manager = SnapshotManager::new(snapshot_dir)?;
-    
+
     // Try to extract to a temporary directory for validation
     let temp_dir = std::env::temp_dir().join(format!("pq-verify-{}", std::process::id()));
-    
+
     if temp_dir.exists() {
         fs::remove_dir_all(&temp_dir)?;
     }

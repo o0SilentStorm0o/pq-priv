@@ -840,10 +840,22 @@ mod tests {
         let good = mine_child_block(&chain, &params, 1_000 + params.target_spacing);
         chain.apply_block(good.clone()).expect("apply good block");
 
-        let mut header = good.header.clone();
-        let bad_bits = header.n_bits.saturating_sub(1);
-        header.n_bits = bad_bits;
-        let forged = mine_block(header, good.txs.clone(), &params.pow_limit);
+        // Create forged block that extends active tip but with wrong difficulty
+        let tx = coinbase(good.header.time + params.target_spacing);
+        let txs = vec![tx.clone()];
+        let bad_bits = chain.next_difficulty_bits().unwrap().saturating_sub(1);
+        let header = BlockHeader {
+            version: 1,
+            prev_hash: pow_hash(&good.header),
+            merkle_root: consensus::merkle_root(&txs),
+            utxo_root: [0u8; 32],
+            time: good.header.time + params.target_spacing,
+            n_bits: bad_bits,
+            nonce: 0,
+            alg_tag: 1,
+        };
+        let forged = mine_block(header, txs, &params.pow_limit);
+        
         let err = chain.apply_block(forged).expect_err("should reject");
         match err {
             ChainError::Consensus(ConsensusError::InvalidBits) => {}

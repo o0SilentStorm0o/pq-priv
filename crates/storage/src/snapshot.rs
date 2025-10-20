@@ -43,11 +43,7 @@ pub struct SnapshotMetadata {
 
 impl SnapshotMetadata {
     /// Create metadata from current store state.
-    pub fn from_tip_info(
-        tip: &TipInfo,
-        utxo_count: u64,
-        column_families: Vec<String>,
-    ) -> Self {
+    pub fn from_tip_info(tip: &TipInfo, utxo_count: u64, column_families: Vec<String>) -> Self {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system time before UNIX epoch")
@@ -67,11 +63,13 @@ impl SnapshotMetadata {
     /// Parse cumulative work from hex string.
     pub fn parse_cumulative_work(&self) -> Result<BigUint, StorageError> {
         BigUint::from_str_radix(&self.cumulative_work, 16).map_err(|_| {
-            StorageError::Corrupted(format!(
-                "invalid cumulative work in metadata: {}",
-                self.cumulative_work
+            StorageError::Corrupted(
+                format!(
+                    "invalid cumulative work in metadata: {}",
+                    self.cumulative_work
+                )
+                .into(),
             )
-            .into())
         })
     }
 
@@ -113,14 +111,10 @@ impl SnapshotManager {
     /// - Uses RocksDB checkpoint for consistency
     /// - Atomic write via temporary directory + rename
     /// - Validates all paths before operations
-    pub fn create_snapshot(
-        &self,
-        store: &Store,
-        utxo_count: u64,
-    ) -> Result<PathBuf, StorageError> {
+    pub fn create_snapshot(&self, store: &Store, utxo_count: u64) -> Result<PathBuf, StorageError> {
         let tip = store
             .tip()?
-            .ok_or_else(|| StorageError::MissingMeta("tip"))?;
+            .ok_or(StorageError::MissingMeta("tip"))?;
 
         info!(
             height = tip.height,
@@ -129,7 +123,9 @@ impl SnapshotManager {
         );
 
         // Create temporary checkpoint directory
-        let temp_dir = self.snapshot_dir.join(format!("temp-{}-{}", tip.height, std::process::id()));
+        let temp_dir =
+            self.snapshot_dir
+                .join(format!("temp-{}-{}", tip.height, std::process::id()));
         if temp_dir.exists() {
             fs::remove_dir_all(&temp_dir).map_err(|e| {
                 StorageError::Corrupted(format!("failed to remove old temp dir: {}", e).into())
@@ -205,7 +201,7 @@ impl SnapshotManager {
         // Create temporary extraction directory
         let temp_dir = target_dir
             .parent()
-            .ok_or_else(|| StorageError::MissingMeta("target directory parent"))?;
+            .ok_or(StorageError::MissingMeta("target directory parent"))?;
         let extract_dir = temp_dir.join(format!("restore-temp-{}", std::process::id()));
 
         if extract_dir.exists() {
@@ -266,7 +262,11 @@ impl SnapshotManager {
         // Validate format version
         if metadata.format_version != 1 {
             return Err(StorageError::Corrupted(
-                format!("unsupported snapshot format version: {}", metadata.format_version).into(),
+                format!(
+                    "unsupported snapshot format version: {}",
+                    metadata.format_version
+                )
+                .into(),
             ));
         }
 
@@ -295,7 +295,7 @@ impl SnapshotManager {
 
         // Finish tar builder and get encoder
         let encoder = tar.into_inner()?;
-        
+
         // Finish gzip encoder to flush all data
         encoder.finish()?;
 
@@ -327,7 +327,10 @@ impl SnapshotManager {
             }
 
             // Security: Reject path traversal
-            if path.components().any(|c| c == std::path::Component::ParentDir) {
+            if path
+                .components()
+                .any(|c| c == std::path::Component::ParentDir)
+            {
                 return Err(StorageError::Corrupted(
                     format!("snapshot contains path traversal: {}", path.display()).into(),
                 ));
@@ -342,7 +345,7 @@ impl SnapshotManager {
                     // Path doesn't exist yet, check parent
                     let parent = target_path
                         .parent()
-                        .ok_or_else(|| StorageError::MissingMeta("entry path parent"))?;
+                        .ok_or(StorageError::MissingMeta("entry path parent"))?;
                     let canonical_parent = parent.canonicalize()?;
                     canonical_parent.join(target_path.file_name().unwrap())
                 }
@@ -395,7 +398,7 @@ impl SnapshotManager {
                 && path
                     .file_name()
                     .and_then(|s| s.to_str())
-                    .map_or(false, |s| s.starts_with("snap-"))
+                    .is_some_and(|s| s.starts_with("snap-"))
             {
                 snapshots.push(path);
             }
@@ -450,19 +453,17 @@ mod tests {
 
     #[test]
     fn test_metadata_roundtrip() {
-        let tip = TipInfo::new(
-            1000,
-            [42u8; 32],
-            BigUint::from(12345u64),
-            5,
-        );
+        let tip = TipInfo::new(1000, [42u8; 32], BigUint::from(12345u64), 5);
 
         let metadata = SnapshotMetadata::from_tip_info(&tip, 5000, vec!["default".to_string()]);
 
         assert_eq!(metadata.height, 1000);
         assert_eq!(metadata.utxo_count, 5000);
         assert_eq!(metadata.parse_tip_hash().unwrap(), [42u8; 32]);
-        assert_eq!(metadata.parse_cumulative_work().unwrap(), BigUint::from(12345u64));
+        assert_eq!(
+            metadata.parse_cumulative_work().unwrap(),
+            BigUint::from(12345u64)
+        );
     }
 
     #[test]
