@@ -855,7 +855,7 @@ mod tests {
             alg_tag: 1,
         };
         let forged = mine_block(header, txs, &params.pow_limit);
-        
+
         let err = chain.apply_block(forged).expect_err("should reject");
         match err {
             ChainError::Consensus(ConsensusError::InvalidBits) => {}

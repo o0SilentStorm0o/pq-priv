@@ -180,7 +180,9 @@ impl DbTuning {
 
         // Compression: only zstd, lz4, or none
         if let Some(ref comp) = self.compression
-            && comp != "zstd" && comp != "lz4" && comp != "none"
+            && comp != "zstd"
+            && comp != "lz4"
+            && comp != "none"
         {
             warn!("compression='{}' is invalid, using 'zstd'", comp);
             self.compression = Some("zstd".into());
@@ -366,8 +368,8 @@ mod tests {
     #[test]
     fn test_valid_values_not_clamped() {
         let tuning = DbTuning {
-            write_buffer_mb: Some(512), // Valid
-            block_cache_mb: Some(1024), // Valid
+            write_buffer_mb: Some(512),      // Valid
+            block_cache_mb: Some(1024),      // Valid
             compression: Some("lz4".into()), // Valid
             ..Default::default()
         };

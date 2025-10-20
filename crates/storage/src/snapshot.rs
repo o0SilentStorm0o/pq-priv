@@ -112,9 +112,7 @@ impl SnapshotManager {
     /// - Atomic write via temporary directory + rename
     /// - Validates all paths before operations
     pub fn create_snapshot(&self, store: &Store, utxo_count: u64) -> Result<PathBuf, StorageError> {
-        let tip = store
-            .tip()?
-            .ok_or(StorageError::MissingMeta("tip"))?;
+        let tip = store.tip()?.ok_or(StorageError::MissingMeta("tip"))?;
 
         info!(
             height = tip.height,
