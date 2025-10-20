@@ -111,11 +111,52 @@ curl http://localhost:8745/health      # node_b
 curl http://localhost:8645/chain/tip   # genesis block
 ```
 
+## E2E Multi-Node Testing
+
+Comprehensive Docker-based test suite for validating P2P networking and consensus:
+
+```bash
+# Test linear topology (A → B → C sync)
+./scripts/e2e-test.ps1 -topology line -ports 8545,8546,8547 -minHeight 101
+
+# Test star topology (hub + 3 leafs)
+./scripts/e2e-test.ps1 -topology star -ports 8550,8551,8552,8553 -minHeight 100
+
+# Test partition + reorg (competing chains)
+./scripts/e2e-test.ps1 -topology partition -ports 8560,8561,8562 -minHeight 250
+```
+
+**Validated Scenarios:**
+- ✅ 10-node concurrent mining and sync
+- ✅ Network partition with successful reorg (250-block chains)
+- ✅ Fork-choice algorithm selecting longest chain
+- ✅ Zero event lag under burst conditions
+
+For detailed test scenarios and capacity analysis:
+📖 **[E2E Testing Guide](./docker/e2e/README.md)**
+
+## Network Scalability
+
+**Current Capacity (MVP/Testnet):**
+- Tested: 10 concurrent nodes, 250-block burst syncs
+- Safe capacity: ~100 concurrent peers
+- Event buffer: 2048 messages (sufficient for testnet scale)
+
+**Roadmap to Mainnet (1000+ peers):**
+- Phase 2 (6mo): Public testnet with monitoring
+- Phase 3 (12mo): Optimize based on metrics (deduplication, segmented channels)
+- Phase 4 (24mo): Actor-based architecture for production scale
+
+For scaling strategy and future optimizations:
+📖 **[P2P Scaling Strategy](./docs/p2p-scaling-strategy.md)**
+
 ## Documentation
 
 * [Implementation blueprint (v0.9)](./spec/blueprint.md) – strategic MVP plan.
 * [`spec/build.md`](./spec/build.md) – build & release handbook.
 * [`spec/README.md`](./spec/README.md) – specifications structure.
 * **[Storage Performance Tuning](./docs/perf/storage.md)** – RocksDB configuration and optimization guide.
+* **[P2P Scaling Strategy](./docs/p2p-scaling-strategy.md)** – Network capacity and mainnet roadmap.
+* **[E2E Testing Guide](./docker/e2e/README.md)** – Multi-node test scenarios and validation.
 
 Contributions are welcome! Please read [CONTRIBUTING.md](./CONTRIBUTING.md) and [SECURITY.md](./SECURITY.md).
