@@ -33,6 +33,30 @@ enum Commands {
     Run(RunArgs),
     /// Generate a new wallet seed (placeholder mnemonic support).
     Keygen,
+    /// Create a snapshot of the current database state.
+    SnapshotNow {
+        /// Path to the database directory
+        #[arg(long)]
+        db_path: PathBuf,
+        /// Directory where snapshots will be stored
+        #[arg(long)]
+        snapshot_dir: PathBuf,
+    },
+    /// Restore database from a snapshot archive.
+    RestoreSnapshot {
+        /// Path to the snapshot archive file
+        #[arg(long)]
+        snapshot_path: PathBuf,
+        /// Target directory for restored database
+        #[arg(long)]
+        target_dir: PathBuf,
+    },
+    /// Verify a snapshot archive without restoring.
+    VerifySnapshot {
+        /// Path to the snapshot archive file
+        #[arg(long)]
+        snapshot_path: PathBuf,
+    },
 }
 
 #[derive(Args, Clone, Debug, Default)]
@@ -40,6 +64,18 @@ struct RunArgs {
     /// Optional path to a TOML configuration file.
     #[arg(long)]
     config: Option<PathBuf>,
+    
+    /// Directory where snapshots will be stored (overrides config file).
+    #[arg(long)]
+    snapshot_dir: Option<PathBuf>,
+    
+    /// Automatic snapshot interval in blocks (0 = disabled, overrides config file).
+    #[arg(long)]
+    snapshot_interval: Option<u64>,
+    
+    /// Number of snapshots to keep (overrides config file).
+    #[arg(long)]
+    snapshot_keep: Option<usize>,
 }
 
 #[tokio::main]
@@ -55,12 +91,39 @@ async fn main() -> anyhow::Result<()> {
                 "Generated placeholder seed"
             );
         }
+        Commands::SnapshotNow {
+            db_path,
+            snapshot_dir,
+        } => {
+            snapshot_now(db_path, snapshot_dir).await?;
+        }
+        Commands::RestoreSnapshot {
+            snapshot_path,
+            target_dir,
+        } => {
+            restore_snapshot(snapshot_path, target_dir).await?;
+        }
+        Commands::VerifySnapshot { snapshot_path } => {
+            verify_snapshot(snapshot_path).await?;
+        }
     }
     Ok(())
 }
 
 async fn run_node(args: RunArgs) -> anyhow::Result<()> {
-    let config = NodeConfig::load(args.config.as_deref())?;
+    let mut config = NodeConfig::load(args.config.as_deref())?;
+    
+    // CLI overrides for snapshot configuration
+    if let Some(snapshot_dir) = args.snapshot_dir {
+        config.snapshots_path = snapshot_dir;
+    }
+    if let Some(interval) = args.snapshot_interval {
+        config.snapshot_interval = interval;
+    }
+    if let Some(keep) = args.snapshot_keep {
+        config.snapshot_keep = keep;
+    }
+    
     let params = ChainParams::default();
     let genesis = genesis_block(&params);
     info!(hash = ?pow_hash(&genesis.header), "Loaded genesis block");
@@ -285,6 +348,145 @@ fn validate_storage_path(path: &PathBuf) -> anyhow::Result<()> {
             }
         }
     }
+
+    Ok(())
+}
+
+/// Create a snapshot of the current database state.
+async fn snapshot_now(db_path: PathBuf, snapshot_dir: PathBuf) -> anyhow::Result<()> {
+    use storage::{DbTuning, SnapshotManager};
+    use std::time::Instant;
+
+    info!(
+        db_path = %db_path.display(),
+        snapshot_dir = %snapshot_dir.display(),
+        "creating database snapshot"
+    );
+
+    fs::create_dir_all(&snapshot_dir)?;
+
+    let start = Instant::now();
+
+    // Open database read-only
+    let store = Store::open_with_tuning(&db_path, DbTuning::default())?;
+    
+    // Get UTXO count (approximate via tip height for now)
+    let tip = store.tip()?.ok_or_else(|| anyhow::anyhow!("no tip found"))?;
+    let utxo_count = tip.height; // TODO: implement actual UTXO counting
+
+    let manager = SnapshotManager::new(&snapshot_dir)?;
+    let snapshot_path = manager.create_snapshot(&store, utxo_count)?;
+
+    let duration_ms = start.elapsed().as_millis() as u64;
+
+    info!(
+        path = %snapshot_path.display(),
+        height = tip.height,
+        duration_ms = duration_ms,
+        "snapshot created successfully"
+    );
+
+    // Note: Metrics would be recorded here with:
+    // metrics.record_snapshot_success(tip.height, duration_ms);
+
+    Ok(())
+}
+
+/// Restore database from a snapshot archive.
+async fn restore_snapshot(snapshot_path: PathBuf, target_dir: PathBuf) -> anyhow::Result<()> {
+    use storage::SnapshotManager;
+    use std::time::Instant;
+
+    info!(
+        snapshot = %snapshot_path.display(),
+        target = %target_dir.display(),
+        "restoring database from snapshot"
+    );
+
+    let start = Instant::now();
+
+    let snapshot_dir = snapshot_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("snapshot path has no parent directory"))?;
+
+    let manager = SnapshotManager::new(snapshot_dir)?;
+    let metadata = manager.restore_snapshot(&snapshot_path, &target_dir)?;
+
+    let duration_ms = start.elapsed().as_millis() as u64;
+
+    info!(
+        height = metadata.height,
+        tip_hash = %metadata.tip_hash,
+        utxo_count = metadata.utxo_count,
+        duration_ms = duration_ms,
+        "database restored successfully"
+    );
+
+    // Verify restored database
+    info!("verifying restored database...");
+    let store = Store::open_with_tuning(&target_dir, storage::DbTuning::default())?;
+    let tip = store.tip()?.ok_or_else(|| anyhow::anyhow!("restored database has no tip"))?;
+
+    if hex::encode(tip.hash) != metadata.tip_hash {
+        anyhow::bail!(
+            "tip hash mismatch: expected {}, got {}",
+            metadata.tip_hash,
+            hex::encode(tip.hash)
+        );
+    }
+
+    if tip.height != metadata.height {
+        anyhow::bail!(
+            "height mismatch: expected {}, got {}",
+            metadata.height,
+            tip.height
+        );
+    }
+
+    info!("database verification successful");
+
+    // Note: Metrics would be recorded here with:
+    // metrics.record_restore_success();
+
+    Ok(())
+}
+
+/// Verify a snapshot archive without restoring.
+async fn verify_snapshot(snapshot_path: PathBuf) -> anyhow::Result<()> {
+    use storage::SnapshotManager;
+
+    info!(
+        path = %snapshot_path.display(),
+        "verifying snapshot archive"
+    );
+
+    let snapshot_dir = snapshot_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("snapshot path has no parent directory"))?;
+
+    let manager = SnapshotManager::new(snapshot_dir)?;
+    
+    // Try to extract to a temporary directory for validation
+    let temp_dir = std::env::temp_dir().join(format!("pq-verify-{}", std::process::id()));
+    
+    if temp_dir.exists() {
+        fs::remove_dir_all(&temp_dir)?;
+    }
+
+    // Restore to temp directory (this validates the entire archive)
+    let metadata = manager.restore_snapshot(&snapshot_path, &temp_dir)?;
+
+    info!(
+        height = metadata.height,
+        tip_hash = %metadata.tip_hash,
+        utxo_count = metadata.utxo_count,
+        timestamp = metadata.timestamp,
+        format_version = metadata.format_version,
+        "snapshot archive is valid"
+    );
+
+    // Cleanup temp directory
+    fs::remove_dir_all(&temp_dir)?;
 
     Ok(())
 }

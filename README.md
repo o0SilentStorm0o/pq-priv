@@ -162,7 +162,11 @@ For scaling strategy and future optimizations:
 * [`spec/build.md`](./spec/build.md) – build & release handbook.
 * [`spec/README.md`](./spec/README.md) – specifications structure.
 * **[Storage Performance Tuning](./docs/perf/storage.md)** – RocksDB configuration and optimization guide.
+<<<<<<< HEAD
 * **[P2P Scaling Strategy](./docs/p2p-scaling-strategy.md)** – Network capacity and mainnet roadmap.
 * **[E2E Testing Guide](./docker/e2e/README.md)** – Multi-node test scenarios and validation.
+=======
+* **[Snapshot and Restore Guide](./docs/snapshots.md)** – Database backup/restore with security hardening.
+>>>>>>> main
 
 Contributions are welcome! Please read [CONTRIBUTING.md](./CONTRIBUTING.md) and [SECURITY.md](./SECURITY.md).
