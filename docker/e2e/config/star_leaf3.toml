@@ -1,0 +1,19 @@
+# leaf3.toml - Star topology: Leaf node 3
+p2p_listen = "0.0.0.0:9013"
+rpc_listen = "0.0.0.0:8553"
+db_path = "/data"
+snapshots_path = "/data/snapshots"
+snapshot_interval = 100
+snapshot_keep = 3
+seeds = ["hub:9010"]
+
+[db]
+write_buffer_mb = 256
+block_cache_mb = 512
+compression = "lz4"
+
+[mempool]
+max_bytes = 52428800
+max_orphans = 100
+min_relay_fee_sat_vb = 1
+orphan_ttl_secs = 600

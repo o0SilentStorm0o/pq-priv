@@ -1,0 +1,19 @@
+# iso_b.toml - Partition topology: Isolated miner B (250 blocks, longer chain)
+p2p_listen = "0.0.0.0:9022"
+rpc_listen = "0.0.0.0:8561"
+db_path = "/data"
+snapshots_path = "/data/snapshots"
+snapshot_interval = 50
+snapshot_keep = 3
+seeds = []  # Isolated, no peers
+
+[db]
+write_buffer_mb = 256
+block_cache_mb = 512
+compression = "lz4"
+
+[mempool]
+max_bytes = 52428800
+max_orphans = 100
+min_relay_fee_sat_vb = 1
+orphan_ttl_secs = 600

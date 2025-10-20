@@ -1,0 +1,87 @@
+# line.yml - Linear topology: A → B → C
+# 
+# Test scenario:
+#   - node_a mines 1000 blocks
+#   - node_b syncs from node_a
+#   - node_c syncs from node_b
+#   - All nodes should reach same tip height and hash
+#
+# Usage:
+#   docker compose -f docker/e2e/line.yml up --build --abort-on-container-exit
+#
+# Verification:
+#   All nodes should have identical tip_height and tip_hash
+
+version: "3.8"
+
+services:
+  node_a:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.e2e
+    container_name: pq_line_a
+    command:
+      - "run"
+      - "--config=/config/line_a.toml"
+    volumes:
+      - ./data/line/a:/data
+      - ./config:/config:ro
+    networks:
+      - line_net
+    ports:
+      - "9001:9001"
+      - "8545:8545"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8545/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  node_b:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.e2e
+    container_name: pq_line_b
+    command:
+      - "run"
+      - "--config=/config/line_b.toml"
+    volumes:
+      - ./data/line/b:/data
+      - ./config:/config:ro
+    networks:
+      - line_net
+    ports:
+      - "9002:9002"
+      - "8546:8546"
+    depends_on:
+      node_a:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  node_c:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.e2e
+    container_name: pq_line_c
+    command:
+      - "run"
+      - "--config=/config/line_c.toml"
+    volumes:
+      - ./data/line/c:/data
+      - ./config:/config:ro
+    networks:
+      - line_net
+    ports:
+      - "9003:9003"
+      - "8547:8547"
+    depends_on:
+      node_b:
+        condition: service_healthy
+
+networks:
+  line_net:
+    driver: bridge
