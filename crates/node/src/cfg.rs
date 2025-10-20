@@ -34,7 +34,7 @@ impl NodeConfig {
             if let Some(explicit) = path {
                 info!(path = %explicit.display(), "configuration file not found, using defaults");
             }
-            // Apply environment variable overrides to DbTuning
+            // Apply environment variable overrides and validate DbTuning
             config.db_tuning = DbTuning::from_env(config.db_tuning);
             return Ok(config);
         }
@@ -68,7 +68,7 @@ impl NodeConfig {
                 config.db_tuning.compression = Some(compression);
             }
         }
-        // Apply environment variable overrides (highest priority)
+        // Apply environment variable overrides (highest priority) and validate
         config.db_tuning = DbTuning::from_env(config.db_tuning);
 
         if let Some(path) = raw.snapshots_path {

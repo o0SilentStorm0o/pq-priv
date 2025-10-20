@@ -5,34 +5,68 @@
 use parking_lot::Mutex;
 use std::sync::Arc;
 
-/// Storage metrics collector.
+/// Storage metrics collector with separate SST, WAL, and directory size metrics.
+///
+/// These metrics are updated by a background task every 15-30 seconds to avoid
+/// blocking /metrics endpoint requests with disk I/O operations.
 #[derive(Clone)]
 pub struct StorageMetrics {
-    /// Total database size in bytes (gauge).
-    db_size_bytes: Arc<Mutex<u64>>,
+    /// SST file size in bytes (from RocksDB property).
+    sst_size_bytes: Arc<Mutex<u64>>,
+    /// WAL file size in bytes (from filesystem scan).
+    wal_size_bytes: Arc<Mutex<u64>>,
+    /// Total directory size in bytes (from filesystem scan).
+    dir_size_bytes: Arc<Mutex<u64>>,
 }
 
 impl StorageMetrics {
     pub fn new() -> Self {
         Self {
-            db_size_bytes: Arc::new(Mutex::new(0)),
+            sst_size_bytes: Arc::new(Mutex::new(0)),
+            wal_size_bytes: Arc::new(Mutex::new(0)),
+            dir_size_bytes: Arc::new(Mutex::new(0)),
         }
     }
 
-    /// Update database size gauge.
-    pub fn set_db_size_bytes(&self, size: u64) {
-        *self.db_size_bytes.lock() = size;
+    /// Update SST file size gauge (from RocksDB property).
+    pub fn set_sst_size_bytes(&self, size: u64) {
+        *self.sst_size_bytes.lock() = size;
+    }
+
+    /// Update WAL file size gauge (from filesystem scan).
+    pub fn set_wal_size_bytes(&self, size: u64) {
+        *self.wal_size_bytes.lock() = size;
+    }
+
+    /// Update total directory size gauge (from filesystem scan).
+    pub fn set_dir_size_bytes(&self, size: u64) {
+        *self.dir_size_bytes.lock() = size;
     }
 
     /// Generate Prometheus exposition format output.
+    ///
+    /// This method reads cached values updated by the background task,
+    /// so it does NOT perform any blocking disk I/O.
     pub fn to_prometheus(&self) -> String {
         let mut output = String::new();
 
-        // Database size gauge
-        let db_size = *self.db_size_bytes.lock();
-        output.push_str("# HELP node_db_size_bytes Total database size on disk\n");
-        output.push_str("# TYPE node_db_size_bytes gauge\n");
-        output.push_str(&format!("node_db_size_bytes {}\n", db_size));
+        // SST file size (from RocksDB property)
+        let sst_size = *self.sst_size_bytes.lock();
+        output.push_str("# HELP node_db_sst_bytes Size of SST files from RocksDB property\n");
+        output.push_str("# TYPE node_db_sst_bytes gauge\n");
+        output.push_str(&format!("node_db_sst_bytes {}\n", sst_size));
+
+        // WAL file size (from filesystem scan)
+        let wal_size = *self.wal_size_bytes.lock();
+        output.push_str("# HELP node_db_wal_bytes Size of WAL files from filesystem scan\n");
+        output.push_str("# TYPE node_db_wal_bytes gauge\n");
+        output.push_str(&format!("node_db_wal_bytes {}\n", wal_size));
+
+        // Total directory size (from filesystem scan)
+        let dir_size = *self.dir_size_bytes.lock();
+        output.push_str("# HELP node_db_dir_bytes Total database directory size including all files\n");
+        output.push_str("# TYPE node_db_dir_bytes gauge\n");
+        output.push_str(&format!("node_db_dir_bytes {}\n", dir_size));
 
         // Write batch histogram - read from storage crate
         {
@@ -103,12 +137,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_db_size_gauge() {
+    fn test_db_size_gauges() {
         let metrics = StorageMetrics::new();
-        metrics.set_db_size_bytes(1024 * 1024 * 500); // 500 MB
+        metrics.set_sst_size_bytes(1024 * 1024 * 400); // 400 MB SST
+        metrics.set_wal_size_bytes(1024 * 1024 * 50);  // 50 MB WAL
+        metrics.set_dir_size_bytes(1024 * 1024 * 500); // 500 MB total
 
         let output = metrics.to_prometheus();
-        assert!(output.contains("node_db_size_bytes 524288000"));
+        assert!(output.contains("node_db_sst_bytes 419430400"));
+        assert!(output.contains("node_db_wal_bytes 52428800"));
+        assert!(output.contains("node_db_dir_bytes 524288000"));
     }
 
     #[test]

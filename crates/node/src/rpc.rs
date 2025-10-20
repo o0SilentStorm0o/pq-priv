@@ -30,7 +30,7 @@ pub struct RpcContext {
     mempool: Arc<Mutex<TxPool>>,
     chain: Arc<Mutex<ChainState>>,
     network: Arc<Mutex<NetworkHandle>>,
-    storage_metrics: StorageMetrics,
+    storage_metrics: Arc<StorageMetrics>,
 }
 
 impl RpcContext {
@@ -38,12 +38,13 @@ impl RpcContext {
         mempool: Arc<Mutex<TxPool>>,
         chain: Arc<Mutex<ChainState>>,
         network: NetworkHandle,
+        storage_metrics: Arc<StorageMetrics>,
     ) -> Self {
         Self {
             mempool,
             chain,
             network: Arc::new(Mutex::new(network)),
-            storage_metrics: StorageMetrics::new(),
+            storage_metrics,
         }
     }
 
@@ -79,17 +80,7 @@ impl RpcContext {
     fn render_metrics(&self) -> String {
         let snapshot = self.metrics_snapshot();
 
-        // Update storage metrics from actual RocksDB state
-        {
-            let guard = self.chain.lock();
-            let store = guard.store();
-
-            // Update DB size from actual RocksDB
-            if let Ok(size) = store.total_db_size() {
-                self.storage_metrics.set_db_size_bytes(size);
-            }
-        }
-
+        // Storage metrics are updated by background task, just read cached values
         let mut body = String::new();
         let _ = writeln!(body, "pqpriv_peers {}", snapshot.peer_count);
         let _ = writeln!(body, "pqpriv_tip_height {}", snapshot.chain.height);
@@ -557,7 +548,8 @@ mod tests {
         };
         let version = Version::user_agent("test", 0);
         let network = start_network(config, version).await.expect("start network");
-        let ctx = Arc::new(RpcContext::new(mempool, chain, network));
+        let storage_metrics = Arc::new(StorageMetrics::new());
+        let ctx = Arc::new(RpcContext::new(mempool, chain, network, storage_metrics));
         let body = handle_metrics(State(ctx)).await;
         for metric in [
             "pqpriv_peers",

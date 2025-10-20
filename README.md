@@ -54,6 +54,12 @@ match the Sprint 3 acceptance criteria:
 - **Prometheus metrics** – `/metrics` exposes chain height, cumulative work,
   mempool depth, reorg counters, and RocksDB compaction gauges for monitoring.
 
+> ⚠️ **Security Warning**: The `/metrics` endpoint is **NOT intended for public internet exposure**.
+> It should be bound to `localhost` (default: `127.0.0.1:8645`) or protected with authentication
+> (mTLS, reverse proxy with basic auth). Database size and performance metrics can leak information
+> about blockchain activity and system capacity. See [`docs/perf/storage.md`](./docs/perf/storage.md#metrics-security)
+> for configuration examples.
+
 ---
 
 ## Development

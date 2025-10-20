@@ -292,6 +292,80 @@ done
 # TODO: Add compaction metrics endpoint
 ```
 
+## Storage Metrics
+
+PQ-PRIV exposes detailed storage metrics via `/metrics` endpoint for Prometheus scraping.
+
+### Available Metrics
+
+#### Database Size Metrics
+
+The node tracks three separate metrics for database size:
+
+| Metric | Description | Update Frequency |
+|--------|-------------|------------------|
+| `node_db_sst_bytes` | Size of SST files from RocksDB property | Every 15 seconds |
+| `node_db_wal_bytes` | Size of WAL (Write-Ahead Log) files | Every 15 seconds |
+| `node_db_dir_bytes` | Total database directory size (all files) | Every 15 seconds |
+
+**Why three metrics?**
+
+- **SST size** tracks compacted data (the "real" database size)
+- **WAL size** indicates pending write buffer flushes
+- **Dir size** includes all files (SST + WAL + MANIFEST + CURRENT + temp files)
+
+**Example usage:**
+
+```promql
+# Alert if WAL grows beyond 1 GB (possible stuck compaction)
+node_db_wal_bytes > 1073741824
+
+# Alert if total database exceeds 90% of disk space
+node_db_dir_bytes / node_filesystem_size_bytes > 0.9
+```
+
+#### Write Batch Performance
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `node_db_write_batch_ms` | histogram | Duration of write-batch commits |
+| `node_db_write_batch_ms_count` | counter | Total number of write batches |
+| `node_db_write_batch_ms_sum` | counter | Total milliseconds spent in write batches |
+| `node_db_wal_synced_total` | counter | Number of WAL sync operations (≈write batch count) |
+
+**Performance targets:**
+
+- **p50 < 5ms**: Good baseline performance
+- **p99 < 50ms**: Acceptable under load
+- **p99 > 100ms**: Investigate disk I/O or compaction issues
+
+### Metrics Security
+
+⚠️ **IMPORTANT**: The `/metrics` endpoint exposes operational information that should NOT be publicly accessible:
+
+- DB size metrics can leak information about blockchain activity
+- Write patterns may reveal transaction volume
+- Performance metrics expose system capacity
+
+**Recommended setup:**
+
+1. **Bind to localhost only** (default: `127.0.0.1:8645`)
+2. **Use reverse proxy with authentication** (nginx + basic auth, or mTLS)
+3. **Firewall /metrics endpoint** from public internet
+4. **Use Prometheus with network isolation** (VPN or private network)
+
+Example nginx config:
+
+```nginx
+location /metrics {
+    proxy_pass http://127.0.0.1:8645/metrics;
+    allow 10.0.0.0/8;  # Internal network only
+    deny all;
+    auth_basic "Metrics";
+    auth_basic_user_file /etc/nginx/.htpasswd;
+}
+```
+
 ## Production Checklist
 
 Before deploying to production:
@@ -303,6 +377,7 @@ Before deploying to production:
 - [ ] Mounted with `noatime` (Linux)
 - [ ] File descriptor limit ≥65536
 - [ ] SSD/NVMe storage (not HDD)
+- [ ] **Metrics endpoint secured** (localhost bind or auth)
 - [ ] Monitoring configured (Prometheus)
 - [ ] Backup strategy tested (snapshots)
 - [ ] Disk space alerts configured

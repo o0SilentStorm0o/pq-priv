@@ -14,8 +14,9 @@ use tracing::{error, info};
 use tx::{Output, OutputMeta, Tx, TxBuilder, Witness, build_stealth_blob};
 
 use node::{
-    ChainState, NodeConfig, Relay, RpcContext, SyncManager, TxPool, run_block_sync_task,
-    run_chain_event_loop, run_peer_event_loop, spawn_rpc_server,
+    ChainState, NodeConfig, Relay, RpcContext, StorageMetrics, SyncManager, TxPool,
+    run_block_sync_task, run_chain_event_loop, run_peer_event_loop,
+    run_storage_metrics_task, spawn_rpc_server,
 };
 use p2p::{NodeAddr, P2pConfig, Services, Version, start_network};
 
@@ -67,6 +68,9 @@ async fn run_node(args: RunArgs) -> anyhow::Result<()> {
     fs::create_dir_all(&config.db_path)?;
     fs::create_dir_all(&config.snapshots_path)?;
 
+    // Storage path safety checks (防止path-traversal攻击)
+    validate_storage_path(&config.db_path)?;
+
     let store = Store::open_with_tuning(&config.db_path, config.db_tuning.clone())?;
     let mut chain_state = ChainState::bootstrap(params.clone(), store, genesis.clone())?;
     chain_state.configure_snapshots(SnapshotConfig::new(
@@ -115,10 +119,14 @@ async fn run_node(args: RunArgs) -> anyhow::Result<()> {
         Arc::clone(&sync),
     );
 
+    // Create storage metrics collector (shared between RPC and background task)
+    let storage_metrics = Arc::new(StorageMetrics::new());
+
     let rpc_context = Arc::new(RpcContext::new(
         Arc::clone(&mempool),
         Arc::clone(&chain),
         network.clone(),
+        Arc::clone(&storage_metrics),
     ));
     let (rpc_handle, rpc_addr) =
         spawn_rpc_server(Arc::clone(&rpc_context), config.rpc_listen).await?;
@@ -130,6 +138,13 @@ async fn run_node(args: RunArgs) -> anyhow::Result<()> {
         network.clone(),
     ));
     let sync_task = tokio::spawn(run_block_sync_task(Arc::clone(&chain), network.clone()));
+
+    // Background task to update storage metrics every 15 seconds
+    let metrics_task = tokio::spawn(run_storage_metrics_task(
+        config.db_path.clone(),
+        Arc::clone(&chain),
+        Arc::clone(&storage_metrics),
+    ));
 
     info!(
         p2p = %listen_addr,
@@ -145,11 +160,13 @@ async fn run_node(args: RunArgs) -> anyhow::Result<()> {
     peer_task.abort();
     chain_task.abort();
     sync_task.abort();
+    metrics_task.abort();
     rpc_handle.abort();
 
     let _ = peer_task.await;
     let _ = chain_task.await;
     let _ = sync_task.await;
+    let _ = metrics_task.await;
     let _ = rpc_handle.await;
 
     Ok(())
@@ -225,4 +242,49 @@ fn current_time() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs()
+}
+
+/// Validate storage path for security issues.
+///
+/// Checks:
+/// - No symlinks in path (prevents path-traversal attacks)
+/// - Appropriate permissions (warns if too permissive)
+///
+/// This prevents security issues when snapshot/restore features are added.
+fn validate_storage_path(path: &PathBuf) -> anyhow::Result<()> {
+    use anyhow::bail;
+
+    // Check for symlinks in path
+    if path.exists() {
+        let metadata = fs::symlink_metadata(path)?;
+        if metadata.is_symlink() {
+            bail!(
+                "Storage path '{}' is a symlink. This is not allowed for security reasons. \
+                Use a real directory instead.",
+                path.display()
+            );
+        }
+
+        // Check permissions on Unix systems
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            use tracing::warn;
+
+            let mode = metadata.permissions().mode();
+            let perms = mode & 0o777;
+            
+            // Warn if directory is world-readable or world-writable
+            if perms & 0o007 != 0 {
+                warn!(
+                    path = %path.display(),
+                    mode = format!("{:o}", perms),
+                    "Storage directory has world-accessible permissions. \
+                    Recommended: 700 (owner-only) or 750 (owner+group)"
+                );
+            }
+        }
+    }
+
+    Ok(())
 }

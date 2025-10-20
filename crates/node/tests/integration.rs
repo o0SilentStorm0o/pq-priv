@@ -120,10 +120,12 @@ impl TestNode {
         );
 
         let rpc_task = if let Some(addr) = options.rpc {
+            let storage_metrics = Arc::new(node::StorageMetrics::new());
             let ctx = Arc::new(RpcContext::new(
                 Arc::clone(&mempool),
                 Arc::clone(&chain),
                 network.clone(),
+                storage_metrics,
             ));
             let (handle, _) = spawn_rpc_server(Arc::clone(&ctx), addr)
                 .await
