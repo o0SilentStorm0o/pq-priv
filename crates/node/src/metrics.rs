@@ -106,7 +106,9 @@ impl StorageMetrics {
 
         // Total directory size (from filesystem scan)
         let dir_size = *self.dir_size_bytes.lock();
-        output.push_str("# HELP node_db_dir_bytes Total database directory size including all files\n");
+        output.push_str(
+            "# HELP node_db_dir_bytes Total database directory size including all files\n",
+        );
         output.push_str("# TYPE node_db_dir_bytes gauge\n");
         output.push_str(&format!("node_db_dir_bytes {}\n", dir_size));
 
@@ -172,15 +174,13 @@ impl StorageMetrics {
         let restore_count = *self.restore_count_total.lock();
         let restore_failures = *self.restore_failures_total.lock();
 
-        output.push_str(
-            "# HELP node_snapshot_count_total Number of successful snapshot creations\n",
-        );
+        output
+            .push_str("# HELP node_snapshot_count_total Number of successful snapshot creations\n");
         output.push_str("# TYPE node_snapshot_count_total counter\n");
         output.push_str(&format!("node_snapshot_count_total {}\n", snapshot_count));
 
-        output.push_str(
-            "# HELP node_snapshot_failures_total Number of failed snapshot creations\n",
-        );
+        output
+            .push_str("# HELP node_snapshot_failures_total Number of failed snapshot creations\n");
         output.push_str("# TYPE node_snapshot_failures_total counter\n");
         output.push_str(&format!(
             "node_snapshot_failures_total {}\n",
@@ -204,11 +204,12 @@ impl StorageMetrics {
         output.push_str("# TYPE node_restore_count_total counter\n");
         output.push_str(&format!("node_restore_count_total {}\n", restore_count));
 
-        output.push_str(
-            "# HELP node_restore_failures_total Number of failed snapshot restores\n",
-        );
+        output.push_str("# HELP node_restore_failures_total Number of failed snapshot restores\n");
         output.push_str("# TYPE node_restore_failures_total counter\n");
-        output.push_str(&format!("node_restore_failures_total {}\n", restore_failures));
+        output.push_str(&format!(
+            "node_restore_failures_total {}\n",
+            restore_failures
+        ));
 
         output
     }
@@ -228,7 +229,7 @@ mod tests {
     fn test_db_size_gauges() {
         let metrics = StorageMetrics::new();
         metrics.set_sst_size_bytes(1024 * 1024 * 400); // 400 MB SST
-        metrics.set_wal_size_bytes(1024 * 1024 * 50);  // 50 MB WAL
+        metrics.set_wal_size_bytes(1024 * 1024 * 50); // 50 MB WAL
         metrics.set_dir_size_bytes(1024 * 1024 * 500); // 500 MB total
 
         let output = metrics.to_prometheus();
