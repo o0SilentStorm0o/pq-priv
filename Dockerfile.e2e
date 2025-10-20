@@ -14,8 +14,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy source
 COPY . .
 
-# Build release binary (node only for E2E)
-RUN cargo build --release --locked --bin node
+# Build release binary (node only for E2E) with devnet feature for /dev/mine endpoint
+RUN cargo build --release --locked --bin node --features devnet
 
 # Runtime stage
 FROM debian:bookworm-slim
