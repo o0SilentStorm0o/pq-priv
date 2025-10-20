@@ -187,6 +187,9 @@ fn test_snapshot_reject_symlink() {
         let encoder = GzEncoder::new(file, Compression::default());
         let mut tar = Builder::new(encoder);
 
+        // CRITICAL: Disable symlink following so symlinks are preserved in archive
+        tar.follow_symlinks(false);
+
         tar.append_path_with_name(&metadata_path, "metadata.json")
             .expect("failed to add metadata");
 
@@ -194,7 +197,7 @@ fn test_snapshot_reject_symlink() {
         tar.append_dir("checkpoint", &checkpoint_dir)
             .expect("failed to add checkpoint dir");
 
-        // Add symlink explicitly (follow=false preserves symlink)
+        // Add symlink - will be preserved as symlink due to follow_symlinks(false)
         tar.append_path_with_name(&symlink_target, "checkpoint/symlink_file")
             .expect("failed to add symlink");
 
