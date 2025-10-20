@@ -146,16 +146,6 @@ fn test_snapshot_cleanup() {
 
 #[test]
 fn test_snapshot_reject_symlink() {
-    let snapshot_dir = TempDir::new().expect("failed to create snapshot dir");
-    let _manager =
-        SnapshotManager::new(snapshot_dir.path()).expect("failed to create snapshot manager");
-
-    // Create a malicious snapshot archive with symlink
-    let _malicious_archive = snapshot_dir.path().join("malicious.tar.gz");
-
-    // For this test, we'll create a simple tar.gz with a symlink entry
-    // In practice, SnapshotManager::extract_archive_secure should reject it
-
     // Create temp directory for archive contents
     let temp_content = TempDir::new().expect("failed to create temp content");
     let checkpoint_dir = temp_content.path().join("checkpoint");
@@ -179,6 +169,10 @@ fn test_snapshot_reject_symlink() {
     // Try to create symlink (may fail on Windows without admin)
     #[cfg(unix)]
     {
+        let snapshot_dir = TempDir::new().expect("failed to create snapshot dir");
+        let manager =
+            SnapshotManager::new(snapshot_dir.path()).expect("failed to create snapshot manager");
+        let malicious_archive = snapshot_dir.path().join("malicious.tar.gz");
         use std::os::unix::fs::symlink;
         let symlink_target = checkpoint_dir.join("symlink_file");
         let _ = symlink("/etc/passwd", &symlink_target);
