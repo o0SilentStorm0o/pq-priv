@@ -5,8 +5,9 @@ edition = "2024"
 license.workspace = true
 
 [features]
-default = []
+default = ["dev_stub_signing"]
 devnet = []
+dev_stub_signing = ["crypto/dev_stub_signing", "tx/dev_stub_signing"]
 
 [dependencies]
 num-bigint = "0.4"

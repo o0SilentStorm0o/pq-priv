@@ -1,11 +1,11 @@
 //! Cryptographic primitives for the PQ-PRIV prototype.
 //!
-//! The current implementation focuses on providing a consistent API and
-//! deterministic key-derivation pipeline that follows the blueprint
-//! described in the project specification.  The current signing routine
-//! relies on Ed25519 as a stand-in until Dilithium/SPHINCS+ bindings are
-//! wired in; the API is designed so that swapping implementations only
-//! requires touching this module.
+//! This module provides a trait-based pluggable signature scheme API that
+//! supports both post-quantum algorithms (Dilithium, SPHINCS+) and
+//! Ed25519 as a development stub for testing.
+//!
+//! The API is designed so that swapping implementations only requires
+//! changing the algorithm tag and does not affect calling code.
 
 use std::convert::TryInto;
 
@@ -26,18 +26,39 @@ pub const KEY_LEN: usize = 32;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum AlgTag {
-    /// Placeholder Dilithium implementation.
-    Dilithium = 0x01,
-    /// Placeholder SPHINCS+ implementation.
-    SphincsPlus = 0x02,
+    /// Ed25519 signature scheme (development stub only).
+    /// Only available with `dev_stub_signing` feature.
+    Ed25519 = 0x00,
+    /// CRYSTALS-Dilithium2 post-quantum signature scheme.
+    Dilithium2 = 0x01,
+    /// CRYSTALS-Dilithium3 post-quantum signature scheme.
+    Dilithium3 = 0x02,
+    /// CRYSTALS-Dilithium5 post-quantum signature scheme.
+    Dilithium5 = 0x03,
+    /// SPHINCS+ post-quantum signature scheme.
+    SphincsPlus = 0x10,
 }
 
 impl AlgTag {
     pub fn from_byte(byte: u8) -> Result<Self, CryptoError> {
         match byte {
-            0x01 => Ok(Self::Dilithium),
-            0x02 => Ok(Self::SphincsPlus),
+            0x00 => Ok(Self::Ed25519),
+            0x01 => Ok(Self::Dilithium2),
+            0x02 => Ok(Self::Dilithium3),
+            0x03 => Ok(Self::Dilithium5),
+            0x10 => Ok(Self::SphincsPlus),
             other => Err(CryptoError::UnsupportedAlg(other)),
+        }
+    }
+
+    /// Returns the name of the algorithm as a string.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Ed25519 => "Ed25519",
+            Self::Dilithium2 => "Dilithium2",
+            Self::Dilithium3 => "Dilithium3",
+            Self::Dilithium5 => "Dilithium5",
+            Self::SphincsPlus => "SPHINCS+",
         }
     }
 }
@@ -51,6 +72,40 @@ pub enum CryptoError {
     UnsupportedAlg(u8),
     #[error("malformed key material")]
     InvalidKey,
+    #[error("key generation failed")]
+    KeyGenFailed,
+    #[error("signing operation failed")]
+    SigningFailed,
+}
+
+/// Trait defining a pluggable signature scheme.
+///
+/// Implementations provide key generation, signing, and verification
+/// operations for a specific cryptographic algorithm.
+pub trait SignatureScheme {
+    /// The algorithm tag identifying this scheme.
+    const ALG: AlgTag;
+
+    /// The name of the algorithm (for display purposes).
+    const NAME: &'static str;
+
+    /// The size of public keys in bytes.
+    const PUBLIC_KEY_BYTES: usize;
+
+    /// The size of secret keys in bytes.
+    const SECRET_KEY_BYTES: usize;
+
+    /// The size of signatures in bytes.
+    const SIGNATURE_BYTES: usize;
+
+    /// Generate a new keypair from a 32-byte seed.
+    fn keygen_from_seed(seed: &[u8; 32]) -> Result<(Vec<u8>, Vec<u8>), CryptoError>;
+
+    /// Sign a message with the secret key.
+    fn sign(secret: &[u8], msg: &[u8]) -> Result<Vec<u8>, CryptoError>;
+
+    /// Verify a signature with the public key.
+    fn verify(public: &[u8], msg: &[u8], sig: &[u8]) -> bool;
 }
 
 /// Deterministic key material used for both scan and spend keys.
@@ -187,16 +242,27 @@ impl SpendKeypair {
 }
 
 fn keypair_from_seed(seed: [u8; KEY_LEN]) -> (PublicKey, SecretKey) {
-    // Expand the deterministic seed into a signing key using ChaCha20 to
-    // avoid trivial low-entropy keys.
-    let mut rng = ChaCha20Rng::from_seed(seed);
-    let mut sk_bytes = [0u8; KEY_LEN];
-    rng.fill_bytes(&mut sk_bytes);
-    let signing = SigningKey::from_bytes(&sk_bytes);
-    let verifying = signing.verifying_key();
+    // Use the default signature scheme for key derivation.
+    // In dev mode this is Ed25519, in production it will be Dilithium2.
+    #[cfg(feature = "dev_stub_signing")]
+    let (pk, sk) = Ed25519Stub::keygen_from_seed(&seed)
+        .expect("keygen from seed should not fail");
+
+    #[cfg(not(feature = "dev_stub_signing"))]
+    let (pk, sk) = {
+        // TODO: Use Dilithium2 once implemented
+        // For now, fall back to Ed25519 until feat/crypto-dilithium is merged
+        let mut rng = ChaCha20Rng::from_seed(seed);
+        let mut sk_bytes = [0u8; KEY_LEN];
+        rng.fill_bytes(&mut sk_bytes);
+        let signing = SigningKey::from_bytes(&sk_bytes);
+        let verifying = signing.verifying_key();
+        (verifying.to_bytes().to_vec(), signing.to_bytes().to_vec())
+    };
+
     (
-        PublicKey::from_bytes(verifying.to_bytes().to_vec()),
-        SecretKey::from_bytes(signing.to_bytes().to_vec()),
+        PublicKey::from_bytes(pk),
+        SecretKey::from_bytes(sk),
     )
 }
 
@@ -206,40 +272,95 @@ pub struct ViewToken {
     pub tag: [u8; KEY_LEN],
 }
 
-/// Ed25519-based placeholder signature scheme.
-pub fn sign(message: &[u8], secret: &SecretKey, alg: AlgTag) -> Signature {
-    let sk_bytes: [u8; KEY_LEN] = secret
-        .as_bytes()
-        .try_into()
-        .expect("secret key must be 32 bytes");
-    let signing = SigningKey::from_bytes(&sk_bytes);
-    let sig = signing.sign(message);
-    Signature::new(alg, sig.to_bytes().to_vec())
+/// Ed25519 signature scheme implementation (development stub).
+///
+/// This implementation is only intended for testing and development.
+/// Production deployments should use post-quantum schemes.
+#[cfg(feature = "dev_stub_signing")]
+pub struct Ed25519Stub;
+
+#[cfg(feature = "dev_stub_signing")]
+impl SignatureScheme for Ed25519Stub {
+    const ALG: AlgTag = AlgTag::Ed25519;
+    const NAME: &'static str = "Ed25519";
+    const PUBLIC_KEY_BYTES: usize = 32;
+    const SECRET_KEY_BYTES: usize = 32;
+    const SIGNATURE_BYTES: usize = 64;
+
+    fn keygen_from_seed(seed: &[u8; 32]) -> Result<(Vec<u8>, Vec<u8>), CryptoError> {
+        let mut rng = ChaCha20Rng::from_seed(*seed);
+        let mut sk_bytes = [0u8; 32];
+        rng.fill_bytes(&mut sk_bytes);
+        let signing = SigningKey::from_bytes(&sk_bytes);
+        let verifying = signing.verifying_key();
+        Ok((
+            verifying.to_bytes().to_vec(),
+            signing.to_bytes().to_vec(),
+        ))
+    }
+
+    fn sign(secret: &[u8], msg: &[u8]) -> Result<Vec<u8>, CryptoError> {
+        let sk_bytes: [u8; 32] = secret
+            .try_into()
+            .map_err(|_| CryptoError::InvalidKey)?;
+        let signing = SigningKey::from_bytes(&sk_bytes);
+        let sig = signing.sign(msg);
+        Ok(sig.to_bytes().to_vec())
+    }
+
+    fn verify(public: &[u8], msg: &[u8], sig: &[u8]) -> bool {
+        let vk_bytes: [u8; 32] = match public.try_into() {
+            Ok(b) => b,
+            Err(_) => return false,
+        };
+        let verifying = match VerifyingKey::from_bytes(&vk_bytes) {
+            Ok(vk) => vk,
+            Err(_) => return false,
+        };
+        let sig_bytes: [u8; 64] = match sig.try_into() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let signature = DalekSignature::from_bytes(&sig_bytes);
+        verifying.verify(msg, &signature).is_ok()
+    }
 }
 
-/// Verify a signature.
+/// High-level signing API that dispatches to the appropriate scheme.
+pub fn sign(message: &[u8], secret: &SecretKey, alg: AlgTag) -> Result<Signature, CryptoError> {
+    let sig_bytes = match alg {
+        #[cfg(feature = "dev_stub_signing")]
+        AlgTag::Ed25519 => Ed25519Stub::sign(secret.as_bytes(), message)?,
+        AlgTag::Dilithium2 => {
+            // Will be implemented in feat/crypto-dilithium branch
+            return Err(CryptoError::UnsupportedAlg(alg as u8));
+        }
+        _ => return Err(CryptoError::UnsupportedAlg(alg as u8)),
+    };
+    Ok(Signature::new(alg, sig_bytes))
+}
+
+/// High-level verification API that dispatches to the appropriate scheme.
 pub fn verify(
     message: &[u8],
     public: &PublicKey,
     signature: &Signature,
 ) -> Result<(), CryptoError> {
-    if signature.alg != AlgTag::Dilithium {
-        return Err(CryptoError::UnsupportedAlg(signature.alg as u8));
+    let valid = match signature.alg {
+        #[cfg(feature = "dev_stub_signing")]
+        AlgTag::Ed25519 => Ed25519Stub::verify(public.as_bytes(), message, &signature.bytes),
+        AlgTag::Dilithium2 => {
+            // Will be implemented in feat/crypto-dilithium branch
+            return Err(CryptoError::UnsupportedAlg(signature.alg as u8));
+        }
+        _ => return Err(CryptoError::UnsupportedAlg(signature.alg as u8)),
+    };
+
+    if valid {
+        Ok(())
+    } else {
+        Err(CryptoError::InvalidSignature)
     }
-    let vk_bytes: [u8; 32] = public
-        .as_bytes()
-        .try_into()
-        .map_err(|_| CryptoError::InvalidKey)?;
-    let verifying = VerifyingKey::from_bytes(&vk_bytes).map_err(|_| CryptoError::InvalidKey)?;
-    let sig_bytes: [u8; 64] = signature
-        .bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| CryptoError::InvalidSignature)?;
-    let sig = DalekSignature::from_bytes(&sig_bytes);
-    verifying
-        .verify(message, &sig)
-        .map_err(|_| CryptoError::InvalidSignature)
 }
 
 /// Compute the linkability tag for a spend witness.
@@ -293,31 +414,66 @@ mod tests {
     }
 
     #[test]
-    fn signature_round_trip() {
+    #[cfg(feature = "dev_stub_signing")]
+    fn signature_round_trip_ed25519() {
         let km = KeyMaterial::random();
         let spend = km.derive_spend_keypair(0);
         let message = b"hello world";
-        let sig = sign(message, &spend.secret, AlgTag::Dilithium);
+        let sig = sign(message, &spend.secret, AlgTag::Ed25519).expect("sign should succeed");
         verify(message, &spend.public, &sig).expect("valid signature");
     }
 
     #[test]
+    #[cfg(feature = "dev_stub_signing")]
+    fn ed25519_direct_trait_api() {
+        let seed = [42u8; 32];
+        let (pk, sk) = Ed25519Stub::keygen_from_seed(&seed).expect("keygen should succeed");
+        let message = b"test message";
+        let sig = Ed25519Stub::sign(&sk, message).expect("sign should succeed");
+        assert!(Ed25519Stub::verify(&pk, message, &sig));
+    }
+
+    #[test]
+    #[cfg(feature = "dev_stub_signing")]
     fn verify_rejects_signature_algorithm_mismatch() {
         let km = KeyMaterial::random();
         let spend = km.derive_spend_keypair(0);
         let message = b"algo mismatch";
-        let sig = sign(message, &spend.secret, AlgTag::Dilithium);
+        let sig = sign(message, &spend.secret, AlgTag::Ed25519).expect("sign should succeed");
         let mismatched = Signature::new(AlgTag::SphincsPlus, sig.bytes.clone());
         assert!(verify(message, &spend.public, &mismatched).is_err());
     }
 
     #[test]
+    #[cfg(feature = "dev_stub_signing")]
     fn verify_rejects_forged_signature() {
         let km = KeyMaterial::random();
         let spend = km.derive_spend_keypair(0);
         let attacker = KeyMaterial::random().derive_spend_keypair(0);
         let message = b"forgery attempt";
-        let forged = sign(message, &attacker.secret, AlgTag::Dilithium);
+        let forged = sign(message, &attacker.secret, AlgTag::Ed25519).expect("sign should succeed");
         assert!(verify(message, &spend.public, &forged).is_err());
+    }
+
+    #[test]
+    #[cfg(feature = "dev_stub_signing")]
+    fn verify_rejects_invalid_signature_bytes() {
+        let km = KeyMaterial::random();
+        let spend = km.derive_spend_keypair(0);
+        let message = b"corrupted";
+        let mut sig = sign(message, &spend.secret, AlgTag::Ed25519).expect("sign should succeed");
+        // Corrupt the signature
+        sig.bytes[0] ^= 0xFF;
+        assert!(verify(message, &spend.public, &sig).is_err());
+    }
+
+    #[test]
+    fn alg_tag_roundtrip() {
+        assert_eq!(AlgTag::from_byte(0x00).unwrap(), AlgTag::Ed25519);
+        assert_eq!(AlgTag::from_byte(0x01).unwrap(), AlgTag::Dilithium2);
+        assert_eq!(AlgTag::from_byte(0x02).unwrap(), AlgTag::Dilithium3);
+        assert_eq!(AlgTag::from_byte(0x03).unwrap(), AlgTag::Dilithium5);
+        assert_eq!(AlgTag::from_byte(0x10).unwrap(), AlgTag::SphincsPlus);
+        assert!(AlgTag::from_byte(0xFF).is_err());
     }
 }

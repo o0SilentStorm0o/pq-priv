@@ -480,7 +480,11 @@ mod tests {
     }
 
     fn sample_signature() -> Signature {
-        Signature::new(AlgTag::Dilithium, vec![0u8; 64])
+        #[cfg(feature = "dev_stub_signing")]
+        let alg = AlgTag::Ed25519;
+        #[cfg(not(feature = "dev_stub_signing"))]
+        let alg = AlgTag::Dilithium2;
+        Signature::new(alg, vec![0u8; 64])
     }
 
     fn sample_public_key() -> PublicKey {

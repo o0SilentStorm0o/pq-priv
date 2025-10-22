@@ -298,7 +298,14 @@ pub fn build_signed_input(
         &ring_proof,
         binding_hash,
     );
-    let signature = crypto::sign(&message, &spend_key.secret, AlgTag::Dilithium);
+    // Use Ed25519 for dev/test, will be Dilithium2 in production
+    #[cfg(feature = "dev_stub_signing")]
+    let alg = AlgTag::Ed25519;
+    #[cfg(not(feature = "dev_stub_signing"))]
+    let alg = AlgTag::Dilithium2;
+    
+    let signature = crypto::sign(&message, &spend_key.secret, alg)
+        .expect("signing should not fail with valid key");
     Input::new(
         prev_txid,
         prev_index,

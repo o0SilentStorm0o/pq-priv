@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 license.workspace = true
 
+[features]
+default = ["dev_stub_signing"]
+dev_stub_signing = ["crypto/dev_stub_signing"]
+
 [dependencies]
 blake3 = "1.5"
 serde = { version = "1.0", features = ["derive"] }
