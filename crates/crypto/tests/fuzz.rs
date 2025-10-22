@@ -205,3 +205,353 @@ fn property_sign_verify_roundtrip() {
             .expect("verifying random signature should succeed");
     }
 }
+
+/// Property-based test: batch verify with random batch sizes
+#[test]
+fn property_batch_verify_random_sizes() {
+    use crypto::{VerifyItem, batch_verify_v2};
+    use rand::RngCore;
+    use rand::rngs::OsRng;
+
+    // Test various batch sizes: 0, 1, 2, 5, 10, 32 (threshold), 64, 100
+    let test_sizes = vec![0, 1, 2, 5, 10, 32, 64, 100];
+
+    for batch_size in test_sizes {
+        // Generate keypairs and sign messages
+        let mut publics = Vec::new();
+        let mut secrets = Vec::new();
+        let mut messages = Vec::new();
+        let mut signatures = Vec::new();
+
+        for i in 0..batch_size {
+            let mut seed = [0u8; 32];
+            seed[0] = i as u8;
+            OsRng.fill_bytes(&mut seed[1..]);
+
+            let (pk, sk) =
+                Dilithium2Scheme::keygen_from_seed(&seed).expect("keygen should succeed");
+            let pk_obj = PublicKey::from_bytes(pk);
+            let sk_obj = SecretKey::from_bytes(sk);
+
+            // Random message size (32 to 1024 bytes)
+            let msg_size = 32 + (OsRng.next_u32() % 992) as usize;
+            let mut message = vec![0u8; msg_size];
+            OsRng.fill_bytes(&mut message);
+
+            let sig = sign(&message, &sk_obj, AlgTag::Dilithium2, context::TX)
+                .expect("signing should succeed");
+
+            publics.push(pk_obj);
+            secrets.push(sk_obj);
+            messages.push(message);
+            signatures.push(sig);
+        }
+
+        // Create VerifyItems
+        let items: Vec<_> = publics
+            .iter()
+            .zip(messages.iter())
+            .zip(signatures.iter())
+            .map(|((pk, msg), sig)| {
+                VerifyItem::new(context::TX, AlgTag::Dilithium2, pk.as_bytes(), msg, &sig.bytes)
+                    .expect("VerifyItem creation should succeed")
+            })
+            .collect();
+
+        // Batch verify should succeed for all valid signatures
+        let outcome = batch_verify_v2(items);
+        assert!(
+            outcome.is_all_valid(),
+            "Batch verify with {} valid signatures should succeed",
+            batch_size
+        );
+    }
+}
+
+/// Fuzz test: batch verify with random invalid signatures
+#[test]
+fn fuzz_batch_verify_with_invalid_signatures() {
+    use crypto::{VerifyItem, batch_verify_v2, BatchVerifyOutcome};
+    use rand::RngCore;
+    use rand::rngs::OsRng;
+
+    const BATCH_SIZE: usize = 20;
+    const INVALID_POSITIONS: &[usize] = &[0, 5, 10, 15, 19]; // Positions to corrupt
+
+    // Generate keypairs and sign messages
+    let mut publics = Vec::new();
+    let mut messages = Vec::new();
+    let mut signatures = Vec::new();
+
+    for i in 0..BATCH_SIZE {
+        let mut seed = [0u8; 32];
+        seed[0] = i as u8;
+        let (pk, sk) = Dilithium2Scheme::keygen_from_seed(&seed).expect("keygen should succeed");
+        let pk_obj = PublicKey::from_bytes(pk);
+        let sk_obj = SecretKey::from_bytes(sk);
+
+        let message = format!("Message {}", i).into_bytes();
+
+        let sig = sign(&message, &sk_obj, AlgTag::Dilithium2, context::TX)
+            .expect("signing should succeed");
+
+        publics.push(pk_obj);
+        messages.push(message);
+        signatures.push(sig);
+    }
+
+    // Corrupt signatures at specific positions
+    for &pos in INVALID_POSITIONS {
+        if signatures[pos].bytes.len() > 10 {
+            signatures[pos].bytes[10] ^= 0xFF;
+        }
+    }
+
+    // Create VerifyItems
+    let items: Vec<_> = publics
+        .iter()
+        .zip(messages.iter())
+        .zip(signatures.iter())
+        .map(|((pk, msg), sig)| {
+            VerifyItem::new(context::TX, AlgTag::Dilithium2, pk.as_bytes(), msg, &sig.bytes)
+                .expect("VerifyItem creation should succeed")
+        })
+        .collect();
+
+    // Batch verify should detect invalid signatures
+    let outcome = batch_verify_v2(items);
+    assert!(
+        !outcome.is_all_valid(),
+        "Batch verify should detect invalid signatures"
+    );
+
+    match outcome {
+        BatchVerifyOutcome::SomeInvalid(count) => {
+            assert_eq!(
+                count,
+                INVALID_POSITIONS.len(),
+                "Should detect exactly {} invalid signatures",
+                INVALID_POSITIONS.len()
+            );
+        }
+        _ => panic!("Expected SomeInvalid outcome"),
+    }
+}
+
+/// Fuzz test: batch verify with random message/signature lengths
+#[test]
+fn fuzz_batch_verify_input_lengths() {
+    use crypto::{VerifyItem, batch_verify_v2};
+
+    // Test edge cases for message and signature lengths
+    let test_cases = vec![
+        // (message_len, sig_len, should_fail)
+        (0, Dilithium2Scheme::SIGNATURE_BYTES, false),       // Empty message OK
+        (1, Dilithium2Scheme::SIGNATURE_BYTES, false),       // Minimal message OK
+        (32, Dilithium2Scheme::SIGNATURE_BYTES, false),      // Normal message OK
+        (1024, Dilithium2Scheme::SIGNATURE_BYTES, false),    // Large message OK
+        (32, 0, true),                                        // Empty signature FAIL
+        (32, 100, true),                                      // Wrong sig size FAIL
+        (32, Dilithium2Scheme::SIGNATURE_BYTES - 1, true),   // One byte short FAIL
+        (32, Dilithium2Scheme::SIGNATURE_BYTES + 1, true),   // One byte long FAIL
+    ];
+
+    for (i, (msg_len, sig_len, should_fail)) in test_cases.iter().enumerate() {
+        let (pk, sk) = Dilithium2Scheme::keygen_from_seed(&[i as u8; 32])
+            .expect("keygen should succeed");
+        let pk_obj = PublicKey::from_bytes(pk);
+        let sk_obj = SecretKey::from_bytes(sk);
+
+        let message = vec![0xAB; *msg_len];
+
+        // Sign the message (if valid message length)
+        let sig = if *msg_len > 0 {
+            sign(&message, &sk_obj, AlgTag::Dilithium2, context::TX)
+                .expect("signing should succeed")
+        } else {
+            // For empty message, create dummy signature
+            Signature::new(
+                AlgTag::Dilithium2,
+                vec![0; Dilithium2Scheme::SIGNATURE_BYTES],
+            )
+        };
+
+        // Create signature bytes with specified length
+        let sig_bytes = if *sig_len == Dilithium2Scheme::SIGNATURE_BYTES {
+            sig.bytes.clone()
+        } else {
+            vec![0xFF; *sig_len]
+        };
+
+        // Try to create VerifyItem
+        let item_result = VerifyItem::new(
+            context::TX,
+            AlgTag::Dilithium2,
+            pk_obj.as_bytes(),
+            &message,
+            &sig_bytes,
+        );
+
+        if *should_fail {
+            // Should fail during VerifyItem creation (length validation)
+            assert!(
+                item_result.is_err(),
+                "Test case {} (msg={}, sig={}) should fail during VerifyItem creation",
+                i,
+                msg_len,
+                sig_len
+            );
+        } else {
+            // Should succeed
+            let item = item_result.expect("VerifyItem creation should succeed");
+
+            // Batch verify with single item
+            let outcome = batch_verify_v2(std::iter::once(item));
+
+            // Empty message might fail verification (depends on signature)
+            if *msg_len == 0 {
+                // Either succeeds or fails, but shouldn't panic
+                let _ = outcome;
+            } else {
+                assert!(
+                    outcome.is_all_valid(),
+                    "Test case {} (msg={}, sig={}) should verify successfully",
+                    i,
+                    msg_len,
+                    sig_len
+                );
+            }
+        }
+    }
+}
+
+/// Property test: batch verify determinism
+#[test]
+fn property_batch_verify_deterministic() {
+    use crypto::{VerifyItem, batch_verify_v2};
+
+    const BATCH_SIZE: usize = 10;
+
+    // Generate keypairs and sign messages
+    let mut publics = Vec::new();
+    let mut messages = Vec::new();
+    let mut signatures = Vec::new();
+
+    for i in 0..BATCH_SIZE {
+        let seed = [i as u8; 32];
+        let (pk, sk) = Dilithium2Scheme::keygen_from_seed(&seed).expect("keygen should succeed");
+        let pk_obj = PublicKey::from_bytes(pk);
+        let sk_obj = SecretKey::from_bytes(sk);
+
+        let message = format!("Deterministic message {}", i).into_bytes();
+        let sig = sign(&message, &sk_obj, AlgTag::Dilithium2, context::TX)
+            .expect("signing should succeed");
+
+        publics.push(pk_obj);
+        messages.push(message);
+        signatures.push(sig);
+    }
+
+    // Run batch verify 5 times with same inputs
+    let mut outcomes = Vec::new();
+    for _ in 0..5 {
+        let items: Vec<_> = publics
+            .iter()
+            .zip(messages.iter())
+            .zip(signatures.iter())
+            .map(|((pk, msg), sig)| {
+                VerifyItem::new(context::TX, AlgTag::Dilithium2, pk.as_bytes(), msg, &sig.bytes)
+                    .expect("VerifyItem creation should succeed")
+            })
+            .collect();
+
+        let outcome = batch_verify_v2(items);
+        outcomes.push(outcome);
+    }
+
+    // All outcomes should be identical (deterministic)
+    for outcome in &outcomes {
+        assert!(
+            outcome.is_all_valid(),
+            "All runs should produce same outcome (all valid)"
+        );
+    }
+}
+
+/// Fuzz test: batch verify with maximum batch size
+#[test]
+fn fuzz_batch_verify_max_size() {
+    use crypto::{VerifyItem, batch_verify_v2, get_max_batch_size};
+
+    let max_size = get_max_batch_size();
+
+    // Generate keypairs (reuse same key for all to save time)
+    let seed = [42u8; 32];
+    let (pk, sk) = Dilithium2Scheme::keygen_from_seed(&seed).expect("keygen should succeed");
+    let pk_obj = PublicKey::from_bytes(pk);
+    let sk_obj = SecretKey::from_bytes(sk);
+
+    // Create max_size signatures
+    let mut publics = vec![pk_obj.clone(); max_size];
+    let mut messages = Vec::new();
+    let mut signatures = Vec::new();
+
+    for i in 0..max_size {
+        let message = format!("Message {}", i).into_bytes();
+        let sig = sign(&message, &sk_obj, AlgTag::Dilithium2, context::TX)
+            .expect("signing should succeed");
+
+        messages.push(message);
+        signatures.push(sig);
+    }
+
+    // Create VerifyItems at max size
+    let items: Vec<_> = publics
+        .iter()
+        .zip(messages.iter())
+        .zip(signatures.iter())
+        .map(|((pk, msg), sig)| {
+            VerifyItem::new(context::TX, AlgTag::Dilithium2, pk.as_bytes(), msg, &sig.bytes)
+                .expect("VerifyItem creation should succeed")
+        })
+        .collect();
+
+    // Batch verify at max size should succeed
+    let outcome = batch_verify_v2(items);
+    assert!(
+        outcome.is_all_valid(),
+        "Batch verify at max size ({}) should succeed",
+        max_size
+    );
+
+    // Test oversized batch (max_size + 1)
+    let extra_message = b"Extra message".to_vec();
+    let extra_sig = sign(&extra_message, &sk_obj, AlgTag::Dilithium2, context::TX)
+        .expect("signing should succeed");
+
+    publics.push(pk_obj.clone());
+    messages.push(extra_message);
+    signatures.push(extra_sig);
+
+    let oversized_items: Vec<_> = publics
+        .iter()
+        .zip(messages.iter())
+        .zip(signatures.iter())
+        .map(|((pk, msg), sig)| {
+            VerifyItem::new(context::TX, AlgTag::Dilithium2, pk.as_bytes(), msg, &sig.bytes)
+                .expect("VerifyItem creation should succeed")
+        })
+        .collect();
+
+    // Oversized batch should be rejected (all marked invalid)
+    let outcome = batch_verify_v2(oversized_items);
+    assert!(
+        !outcome.is_all_valid(),
+        "Batch verify should reject oversized batch"
+    );
+    assert_eq!(
+        outcome.invalid_count(),
+        max_size + 1,
+        "All items in oversized batch should be marked invalid"
+    );
+}
