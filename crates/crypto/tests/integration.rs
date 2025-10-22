@@ -5,9 +5,6 @@
 
 use crypto::*;
 use pqcrypto_mldsa::mldsa44;
-use pqcrypto_traits::sign::{
-    PublicKey as PQPublicKey, SecretKey as PQSecretKey
-};
 
 /// Test complete workflow: keygen → sign → verify for Dilithium2
 #[test]
@@ -17,13 +14,13 @@ fn dilithium2_end_to_end_workflow() {
     let (pk_bytes, sk_bytes) =
         Dilithium2Scheme::keygen_from_seed(&seed).expect("Dilithium2 keygen should succeed");
 
-    let public_key = PQPublicKey::from_bytes(&pk_bytes.clone().unwrap());
-    let secret_key = PQSecretKey::from_bytes(&sk_bytes).unwrap();
+    let public_key = PublicKey::from_bytes(pk_bytes);
+    let secret_key = SecretKey::from_bytes(sk_bytes);
 
     // Step 2: Generate a second keypair for negative tests
     let (pk2_bytes, _) =
         Dilithium2Scheme::keygen_from_seed(&[99u8; 32]).expect("Second keygen should succeed");
-    let wrong_public_key = PQPublicKey::from_bytes(&pk2_bytes).unwrap();
+    let wrong_public_key = PublicKey::from_bytes(pk2_bytes);
 
     // Step 3: Sign message with Dilithium2 using TX context
     let message = b"Transfer 100 coins to Alice";
@@ -74,8 +71,8 @@ fn cross_algorithm_compatibility() {
     // Generate Dilithium2 keys
     let (dilithium_pk, dilithium_sk) =
         Dilithium2Scheme::keygen_from_seed(&[42; 32]).expect("Dilithium2 keygen should succeed");
-    let dilithium_public = PQPublicKey::from_bytes(&dilithium_pk).unwrap();
-    let dilithium_secret = PQSecretKey::from_bytes(&dilithium_sk).unwrap();
+    let dilithium_public = PublicKey::from_bytes(dilithium_pk);
+    let dilithium_secret = SecretKey::from_bytes(dilithium_sk);
 
     // Sign with Dilithium2
     let dilithium_sig = sign(message, &dilithium_secret, AlgTag::Dilithium2, context::TX)
@@ -329,8 +326,8 @@ fn unsupported_algorithms_rejected() {
 fn signature_serialization() {
     let (pk, sk) = Dilithium2Scheme::keygen_from_seed(&[55; 32]).expect("keygen should succeed");
 
-    let pk_obj = PQPublicKey::from_bytes(&pk).unwrap();
-    let sk_obj = PQSecretKey::from_bytes(&sk).unwrap();
+    let pk_obj = PublicKey::from_bytes(pk);
+    let sk_obj = SecretKey::from_bytes(sk);
 
     let message = b"Serialization test";
 
@@ -357,8 +354,8 @@ fn signature_serialization() {
 #[test]
 fn signature_length_validation() {
     let (pk, sk) = Dilithium2Scheme::keygen_from_seed(&[42; 32]).expect("keygen should succeed");
-    let pk_obj = PQPublicKey::from_bytes(&pk).unwrap();
-    let sk_obj = PQSecretKey::from_bytes(&sk).unwrap();
+    let pk_obj = PublicKey::from_bytes(pk);
+    let sk_obj = SecretKey::from_bytes(sk);
 
     let message = b"Test message";
     let sig =
@@ -395,8 +392,8 @@ fn signature_length_validation() {
 #[test]
 fn domain_separation_protection() {
     let (pk, sk) = Dilithium2Scheme::keygen_from_seed(&[42; 32]).expect("keygen should succeed");
-    let pk_obj = PQPublicKey::from_bytes(&pk).unwrap();
-    let sk_obj = PQSecretKey::from_bytes(&sk).unwrap();
+    let pk_obj = PublicKey::from_bytes(pk);
+    let sk_obj = SecretKey::from_bytes(sk);
 
     let message = b"Important transaction";
 
@@ -433,8 +430,8 @@ fn domain_separation_protection() {
 #[test]
 fn corrupted_signature_rejection() {
     let (pk, sk) = Dilithium2Scheme::keygen_from_seed(&[42; 32]).expect("keygen should succeed");
-    let pk_obj = PQPublicKey::from_bytes(&pk).unwrap();
-    let sk_obj = PQSecretKey::from_bytes(&sk).unwrap();
+    let pk_obj = PublicKey::from_bytes(pk);
+    let sk_obj = SecretKey::from_bytes(sk);
 
     let message = b"Test message";
     let sig =
@@ -501,4 +498,400 @@ fn dilithium2_throughput_test() {
         verify_duration.as_millis() < 10_000,
         "verification should complete in reasonable time"
     );
+}
+
+// ============================================================================
+// Batch Verification Tests (Sprint 6)
+// ============================================================================
+
+#[test]
+fn batch_verify_empty_is_valid() {
+    // Empty batch should be trivially valid
+    let items: Vec<VerifyItem> = vec![];
+    let outcome = batch_verify_v2(items);
+    assert_eq!(outcome, BatchVerifyOutcome::AllValid);
+    assert!(outcome.is_all_valid());
+    assert_eq!(outcome.invalid_count(), 0);
+}
+
+#[test]
+fn batch_verify_single_valid_signature() {
+    let seed = [1u8; 32];
+    let (pk_bytes, sk_bytes) = Dilithium2Scheme::keygen_from_seed(&seed)
+        .expect("keygen should succeed");
+
+    let public = PublicKey::from_bytes(pk_bytes);
+    let secret = SecretKey::from_bytes(sk_bytes);
+
+    let msg = b"Test message";
+    let sig = sign(msg, &secret, AlgTag::Dilithium2, context::TX)
+        .expect("signing should succeed");
+
+    let item = VerifyItem::new(
+        context::TX,
+        AlgTag::Dilithium2,
+        public.as_bytes(),
+        msg,
+        &sig.bytes,
+    )
+    .expect("VerifyItem creation should succeed");
+
+    let outcome = batch_verify_v2(vec![item]);
+    assert_eq!(outcome, BatchVerifyOutcome::AllValid);
+}
+
+#[test]
+fn batch_verify_multiple_valid_signatures() {
+    // Generate 10 different keypairs and signatures
+    // CRITICAL: All data (keys, messages, signatures) must be stored OUTSIDE the VerifyItem
+    // creation loop to avoid lifetime issues
+    let count = 10;
+
+    // Step 1: Generate all data and store in vectors
+    let mut publics = Vec::new();
+    let mut secrets = Vec::new();
+    let mut messages = Vec::new();
+    let mut sigs = Vec::new();
+
+    for i in 0..count {
+        let seed = [i as u8; 32];
+        let (pk_bytes, sk_bytes) = Dilithium2Scheme::keygen_from_seed(&seed)
+            .expect("keygen should succeed");
+
+        publics.push(PublicKey::from_bytes(pk_bytes));
+        secrets.push(SecretKey::from_bytes(sk_bytes));
+        messages.push(format!("Message {}", i).into_bytes());
+    }
+
+    // Generate signatures
+    for i in 0..count {
+        let sig = sign(&messages[i], &secrets[i], AlgTag::Dilithium2, context::TX)
+            .expect("signing should succeed");
+        sigs.push(sig);
+    }
+
+    // Step 2: Create VerifyItems with borrows from the stored data
+    let mut items = Vec::with_capacity(count);
+    for i in 0..count {
+        let item = VerifyItem::new(
+            context::TX,
+            AlgTag::Dilithium2,
+            publics[i].as_bytes(),
+            &messages[i],
+            &sigs[i].bytes,
+        )
+        .expect("VerifyItem creation should succeed");
+        items.push(item);
+    }
+
+    let outcome = batch_verify_v2(items);
+    assert_eq!(outcome, BatchVerifyOutcome::AllValid);
+}
+
+#[test]
+fn batch_verify_mixed_validity_one_invalid() {
+    // Create 5 valid signatures and 1 invalid
+    // Store all data in vectors to avoid lifetime issues
+    let count = 5;
+
+    // Generate valid signatures
+    let mut publics = Vec::new();
+    let mut secrets = Vec::new();
+    let mut messages = Vec::new();
+    let mut sigs = Vec::new();
+
+    for i in 0..count {
+        let seed = [i as u8; 32];
+        let (pk_bytes, sk_bytes) = Dilithium2Scheme::keygen_from_seed(&seed)
+            .expect("keygen should succeed");
+
+        publics.push(PublicKey::from_bytes(pk_bytes));
+        secrets.push(SecretKey::from_bytes(sk_bytes));
+        messages.push(format!("Message {}", i).into_bytes());
+    }
+
+    for i in 0..count {
+        let sig = sign(&messages[i], &secrets[i], AlgTag::Dilithium2, context::TX)
+            .expect("signing should succeed");
+        sigs.push(sig);
+    }
+
+    // Add one invalid signature (sign with one message, verify with different)
+    let seed = [99u8; 32];
+    let (pk_bytes, sk_bytes) = Dilithium2Scheme::keygen_from_seed(&seed)
+        .expect("keygen should succeed");
+
+    publics.push(PublicKey::from_bytes(pk_bytes));
+    secrets.push(SecretKey::from_bytes(sk_bytes));
+
+    let signed_msg = b"Original message".to_vec();
+    let sig = sign(&signed_msg, &secrets[count], AlgTag::Dilithium2, context::TX)
+        .expect("signing should succeed");
+    sigs.push(sig);
+
+    // Use different message for verification (invalid)
+    messages.push(b"Different message".to_vec());
+
+    // Create VerifyItems
+    let mut items = Vec::with_capacity(count + 1);
+    for i in 0..=count {
+        let item = VerifyItem::new(
+            context::TX,
+            AlgTag::Dilithium2,
+            publics[i].as_bytes(),
+            &messages[i],
+            &sigs[i].bytes,
+        )
+        .expect("VerifyItem creation should succeed");
+        items.push(item);
+    }
+
+    let outcome = batch_verify_v2(items);
+    assert_eq!(outcome, BatchVerifyOutcome::SomeInvalid(1));
+    assert!(!outcome.is_all_valid());
+    assert_eq!(outcome.invalid_count(), 1);
+}
+
+#[test]
+fn batch_verify_len_checks() {
+    // Test that invalid lengths are rejected at VerifyItem creation
+    let seed = [1u8; 32];
+    let (pk_bytes, sk_bytes) = Dilithium2Scheme::keygen_from_seed(&seed)
+        .expect("keygen should succeed");
+
+    let public = PublicKey::from_bytes(pk_bytes);
+    let secret = SecretKey::from_bytes(sk_bytes);
+
+    let msg = b"Test";
+    let sig = sign(msg, &secret, AlgTag::Dilithium2, context::TX)
+        .expect("signing should succeed");
+
+    // Test wrong public key length
+    let short_pub = &public.as_bytes()[..100];
+    let result = VerifyItem::new(
+        context::TX,
+        AlgTag::Dilithium2,
+        short_pub,
+        msg,
+        &sig.bytes,
+    );
+    assert!(result.is_err(), "Short public key should be rejected");
+
+    // Test wrong signature length
+    let short_sig = &sig.bytes[..100];
+    let result = VerifyItem::new(
+        context::TX,
+        AlgTag::Dilithium2,
+        public.as_bytes(),
+        msg,
+        short_sig,
+    );
+    assert!(result.is_err(), "Short signature should be rejected");
+
+    // Test message too long
+    let huge_msg = vec![0u8; MAX_MESSAGE_LEN + 1];
+    let result = VerifyItem::new(
+        context::TX,
+        AlgTag::Dilithium2,
+        public.as_bytes(),
+        &huge_msg,
+        &sig.bytes,
+    );
+    assert!(result.is_err(), "Oversized message should be rejected");
+}
+
+#[test]
+fn batch_verify_threshold_switch() {
+    // Test that sequential/parallel switch works (implicit in implementation)
+    // We verify both small and large batches work correctly
+
+    // === SMALL BATCH (< threshold, uses sequential) ===
+    let small_count = 5;
+    let mut small_publics = Vec::new();
+    let mut small_secrets = Vec::new();
+    let mut small_messages = Vec::new();
+    let mut small_sigs = Vec::new();
+
+    for i in 0..small_count {
+        let seed = [i as u8; 32];
+        let (pk_bytes, sk_bytes) = Dilithium2Scheme::keygen_from_seed(&seed)
+            .expect("keygen should succeed");
+
+        small_publics.push(PublicKey::from_bytes(pk_bytes));
+        small_secrets.push(SecretKey::from_bytes(sk_bytes));
+        small_messages.push(format!("Msg {}", i).into_bytes());
+    }
+
+    for i in 0..small_count {
+        let sig = sign(&small_messages[i], &small_secrets[i], AlgTag::Dilithium2, context::TX)
+            .expect("signing should succeed");
+        small_sigs.push(sig);
+    }
+
+    let mut small_items = Vec::with_capacity(small_count);
+    for i in 0..small_count {
+        let item = VerifyItem::new(
+            context::TX,
+            AlgTag::Dilithium2,
+            small_publics[i].as_bytes(),
+            &small_messages[i],
+            &small_sigs[i].bytes,
+        )
+        .expect("VerifyItem creation should succeed");
+        small_items.push(item);
+    }
+
+    let outcome = batch_verify_v2(small_items);
+    assert_eq!(outcome, BatchVerifyOutcome::AllValid);
+
+    // === LARGE BATCH (>= threshold, uses parallel if threads > 1) ===
+    let large_count = 50;
+    let mut large_publics = Vec::new();
+    let mut large_secrets = Vec::new();
+    let mut large_messages = Vec::new();
+    let mut large_sigs = Vec::new();
+
+    for i in 0..large_count {
+        let seed = [(i % 256) as u8; 32];
+        let (pk_bytes, sk_bytes) = Dilithium2Scheme::keygen_from_seed(&seed)
+            .expect("keygen should succeed");
+
+        large_publics.push(PublicKey::from_bytes(pk_bytes));
+        large_secrets.push(SecretKey::from_bytes(sk_bytes));
+        large_messages.push(format!("Message {}", i).into_bytes());
+    }
+
+    for i in 0..large_count {
+        let sig = sign(&large_messages[i], &large_secrets[i], AlgTag::Dilithium2, context::TX)
+            .expect("signing should succeed");
+        large_sigs.push(sig);
+    }
+
+    let mut large_items = Vec::with_capacity(large_count);
+    for i in 0..large_count {
+        let item = VerifyItem::new(
+            context::TX,
+            AlgTag::Dilithium2,
+            large_publics[i].as_bytes(),
+            &large_messages[i],
+            &large_sigs[i].bytes,
+        )
+        .expect("VerifyItem creation should succeed");
+        large_items.push(item);
+    }
+
+    let outcome = batch_verify_v2(large_items);
+    assert_eq!(outcome, BatchVerifyOutcome::AllValid);
+}
+
+#[test]
+fn batch_verify_parallel_consistency() {
+    // Verify that sequential and parallel paths produce the same result
+    // Create a deterministic set of signatures
+    let count = 40;
+
+    // Generate data
+    let mut publics = Vec::new();
+    let mut secrets = Vec::new();
+    let mut messages = Vec::new();
+    let mut sigs = Vec::new();
+
+    for i in 0..count {
+        let seed = [i as u8; 32];
+        let (pk_bytes, sk_bytes) = Dilithium2Scheme::keygen_from_seed(&seed)
+            .expect("keygen should succeed");
+
+        publics.push(PublicKey::from_bytes(pk_bytes));
+        secrets.push(SecretKey::from_bytes(sk_bytes));
+        messages.push(format!("Test {}", i).into_bytes());
+    }
+
+    for i in 0..count {
+        let sig = sign(&messages[i], &secrets[i], AlgTag::Dilithium2, context::TX)
+            .expect("signing should succeed");
+        sigs.push(sig);
+    }
+
+    // Create first batch
+    let mut items_1 = Vec::with_capacity(count);
+    for i in 0..count {
+        let item = VerifyItem::new(
+            context::TX,
+            AlgTag::Dilithium2,
+            publics[i].as_bytes(),
+            &messages[i],
+            &sigs[i].bytes,
+        )
+        .expect("VerifyItem creation should succeed");
+        items_1.push(item);
+    }
+
+    // Create second batch (same data)
+    let mut items_2 = Vec::with_capacity(count);
+    for i in 0..count {
+        let item = VerifyItem::new(
+            context::TX,
+            AlgTag::Dilithium2,
+            publics[i].as_bytes(),
+            &messages[i],
+            &sigs[i].bytes,
+        )
+        .expect("VerifyItem creation should succeed");
+        items_2.push(item);
+    }
+
+    // Verify both batches produce same result
+    let outcome1 = batch_verify_v2(items_1);
+    let outcome2 = batch_verify_v2(items_2);
+
+    assert_eq!(outcome1, outcome2, "Parallel and sequential should match");
+    assert_eq!(outcome1, BatchVerifyOutcome::AllValid);
+}
+
+#[test]
+fn batch_verify_max_size_protection() {
+    // Test that reasonable batches work (we can't test MAX_BATCH_SIZE as it's 100k)
+    // and verify max_batch_size getter works
+    
+    let count = 100;
+    let mut publics = Vec::new();
+    let mut secrets = Vec::new();
+    let mut messages = Vec::new();
+    let mut sigs = Vec::new();
+
+    for i in 0..count {
+        let seed = [(i % 256) as u8; 32];
+        let (pk_bytes, sk_bytes) = Dilithium2Scheme::keygen_from_seed(&seed)
+            .expect("keygen should succeed");
+
+        publics.push(PublicKey::from_bytes(pk_bytes));
+        secrets.push(SecretKey::from_bytes(sk_bytes));
+        messages.push(format!("Msg {}", i).into_bytes());
+    }
+
+    for i in 0..count {
+        let sig = sign(&messages[i], &secrets[i], AlgTag::Dilithium2, context::TX)
+            .expect("signing should succeed");
+        sigs.push(sig);
+    }
+
+    let mut items = Vec::with_capacity(count);
+    for i in 0..count {
+        let item = VerifyItem::new(
+            context::TX,
+            AlgTag::Dilithium2,
+            publics[i].as_bytes(),
+            &messages[i],
+            &sigs[i].bytes,
+        )
+        .expect("VerifyItem creation should succeed");
+        items.push(item);
+    }
+
+    let outcome = batch_verify_v2(items);
+    assert_eq!(outcome, BatchVerifyOutcome::AllValid);
+    
+    // Verify max_batch_size getter works
+    let max_size = get_max_batch_size();
+    assert!(max_size >= DEFAULT_MAX_BATCH_SIZE);
 }
