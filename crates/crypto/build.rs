@@ -8,10 +8,10 @@ fn main() {
     //
     // The dev_stub_signing feature includes Ed25519 (non-PQC) for development only.
     // It MUST NOT be used in production as it's vulnerable to quantum attacks.
-    
+
     let dev_stub_enabled = std::env::var("CARGO_FEATURE_DEV_STUB_SIGNING").is_ok();
     let is_release = std::env::var("PROFILE").unwrap_or_default() == "release";
-    
+
     if dev_stub_enabled && is_release {
         // This will cause a compile error in release mode if dev_stub_signing is enabled
         panic!(

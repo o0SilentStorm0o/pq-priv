@@ -21,7 +21,9 @@ use blake3::derive_key;
 #[cfg(feature = "dev_stub_signing")]
 use ed25519_dalek::{Signature as DalekSignature, Signer, SigningKey, Verifier, VerifyingKey};
 use pqcrypto_dilithium::dilithium2;
-use pqcrypto_traits::sign::{DetachedSignature, PublicKey as PQPublicKey, SecretKey as PQSecretKey};
+use pqcrypto_traits::sign::{
+    DetachedSignature, PublicKey as PQPublicKey, SecretKey as PQSecretKey,
+};
 use rand::RngCore;
 use rand::rngs::OsRng;
 #[cfg(feature = "dev_stub_signing")]
@@ -77,13 +79,13 @@ pub struct Context(pub &'static [u8]);
 /// cross-protocol attacks and signature malleability.
 pub mod context {
     use super::Context;
-    
+
     /// Context tag for transaction input signatures.
     pub const TX: Context = Context(b"PQ-PRIV|TX|v1");
-    
+
     /// Context tag for block header signatures.
     pub const BLOCK: Context = Context(b"PQ-PRIV|BLOCK|v1");
-    
+
     /// Context tag for peer-to-peer handshake signatures.
     pub const P2P_HANDSHAKE: Context = Context(b"PQ-PRIV|P2P|v1");
 }
@@ -94,6 +96,7 @@ pub mod context {
 pub enum AlgTag {
     /// Ed25519 signature scheme (development stub only).
     /// Only available with `dev_stub_signing` feature.
+    #[cfg(feature = "dev_stub_signing")]
     Ed25519 = 0x00,
     /// CRYSTALS-Dilithium2 post-quantum signature scheme.
     Dilithium2 = 0x01,
@@ -108,6 +111,7 @@ pub enum AlgTag {
 impl AlgTag {
     pub fn from_byte(byte: u8) -> Result<Self, CryptoError> {
         match byte {
+            #[cfg(feature = "dev_stub_signing")]
             0x00 => Ok(Self::Ed25519),
             0x01 => Ok(Self::Dilithium2),
             0x02 => Ok(Self::Dilithium3),
@@ -120,6 +124,7 @@ impl AlgTag {
     /// Returns the name of the algorithm as a string.
     pub fn as_str(&self) -> &'static str {
         match self {
+            #[cfg(feature = "dev_stub_signing")]
             Self::Ed25519 => "Ed25519",
             Self::Dilithium2 => "Dilithium2",
             Self::Dilithium3 => "Dilithium3",
@@ -216,7 +221,7 @@ pub fn domain_separated_hash(context: Context, alg: AlgTag, msg: &[u8]) -> [u8; 
     const MAX_CONTEXT_LEN: usize = 128; // Static contexts are ~8-16 bytes
     const MAX_MESSAGE_LEN: usize = 10 * 1024 * 1024; // 10 MB max message
     const MAX_CBOR_LEN: usize = 16 * 1024 * 1024; // 16 MB max CBOR output
-    
+
     // Validate context length (should be compile-time enforced by Context type,
     // but we check defensively for auditor-proof guarantees)
     assert!(
@@ -225,7 +230,7 @@ pub fn domain_separated_hash(context: Context, alg: AlgTag, msg: &[u8]) -> [u8; 
         context.0.len(),
         MAX_CONTEXT_LEN
     );
-    
+
     // Validate message length (protects against DoS via huge messages)
     assert!(
         msg.len() <= MAX_MESSAGE_LEN,
@@ -233,19 +238,19 @@ pub fn domain_separated_hash(context: Context, alg: AlgTag, msg: &[u8]) -> [u8; 
         msg.len(),
         MAX_MESSAGE_LEN / (1024 * 1024)
     );
-    
+
     // Construct CBOR tuple: [context_string, alg_tag_u8, message_bytes]
     let tuple = (
         std::str::from_utf8(context.0).unwrap_or("<invalid>"),
         alg as u8,
         msg,
     );
-    
+
     // CBOR encode with deterministic (canonical) encoding
     let mut cbor_bytes = Vec::new();
     ciborium::into_writer(&tuple, &mut cbor_bytes)
         .expect("CBOR encoding should not fail for simple tuple");
-    
+
     // Validate CBOR output length (final defensive check)
     assert!(
         cbor_bytes.len() <= MAX_CBOR_LEN,
@@ -253,11 +258,11 @@ pub fn domain_separated_hash(context: Context, alg: AlgTag, msg: &[u8]) -> [u8; 
         cbor_bytes.len(),
         MAX_CBOR_LEN / (1024 * 1024)
     );
-    
+
     // Hash the CBOR-encoded tuple
     let mut hasher = Sha3_256::new();
     hasher.update(&cbor_bytes);
-    
+
     let result = hasher.finalize();
     result.into()
 }
@@ -297,7 +302,9 @@ impl KeyMaterial {
     pub fn from_entropy(entropy: &[u8]) -> Self {
         let hash = blake3::hash(entropy);
         let seed = Zeroizing::new(hash.as_bytes()[..KEY_LEN].to_vec());
-        Self { master_seed: seed.to_vec() }
+        Self {
+            master_seed: seed.to_vec(),
+        }
     }
 
     /// Generate random key material using the operating system RNG.
@@ -308,7 +315,9 @@ impl KeyMaterial {
         let mut rng = OsRng;
         let mut seed = Zeroizing::new(vec![0u8; KEY_LEN]);
         rng.fill_bytes(&mut seed);
-        Self { master_seed: seed.to_vec() }
+        Self {
+            master_seed: seed.to_vec(),
+        }
     }
 
     fn derive_seed(&self, label: &str, index: u32) -> [u8; KEY_LEN] {
@@ -447,17 +456,13 @@ fn keypair_from_seed(seed: [u8; KEY_LEN]) -> (PublicKey, SecretKey) {
     // Use the default signature scheme for key derivation.
     // In dev mode this is Ed25519, in production it's Dilithium2.
     #[cfg(feature = "dev_stub_signing")]
-    let (pk, sk) = Ed25519Stub::keygen_from_seed(&seed)
-        .expect("keygen from seed should not fail");
+    let (pk, sk) = Ed25519Stub::keygen_from_seed(&seed).expect("keygen from seed should not fail");
 
     #[cfg(not(feature = "dev_stub_signing"))]
-    let (pk, sk) = Dilithium2Scheme::keygen_from_seed(&seed)
-        .expect("keygen from seed should not fail");
+    let (pk, sk) =
+        Dilithium2Scheme::keygen_from_seed(&seed).expect("keygen from seed should not fail");
 
-    (
-        PublicKey::from_bytes(pk),
-        SecretKey::from_bytes(sk),
-    )
+    (PublicKey::from_bytes(pk), SecretKey::from_bytes(sk))
 }
 
 /// Minimal view token shared with auditors.
@@ -487,16 +492,11 @@ impl SignatureScheme for Ed25519Stub {
         rng.fill_bytes(&mut sk_bytes);
         let signing = SigningKey::from_bytes(&sk_bytes);
         let verifying = signing.verifying_key();
-        Ok((
-            verifying.to_bytes().to_vec(),
-            signing.to_bytes().to_vec(),
-        ))
+        Ok((verifying.to_bytes().to_vec(), signing.to_bytes().to_vec()))
     }
 
     fn sign(secret: &[u8], msg: &[u8]) -> Result<Vec<u8>, CryptoError> {
-        let sk_bytes: [u8; 32] = secret
-            .try_into()
-            .map_err(|_| CryptoError::InvalidKey)?;
+        let sk_bytes: [u8; 32] = secret.try_into().map_err(|_| CryptoError::InvalidKey)?;
         let signing = SigningKey::from_bytes(&sk_bytes);
         let sig = signing.sign(msg);
         Ok(sig.to_bytes().to_vec())
@@ -539,7 +539,7 @@ pub struct Dilithium2Scheme;
 impl SignatureScheme for Dilithium2Scheme {
     const ALG: AlgTag = AlgTag::Dilithium2;
     const NAME: &'static str = "Dilithium2";
-    
+
     // Use library constants directly - never hardcode sizes!
     const PUBLIC_KEY_BYTES: usize = dilithium2::public_key_bytes();
     const SECRET_KEY_BYTES: usize = dilithium2::secret_key_bytes();
@@ -556,17 +556,17 @@ impl SignatureScheme for Dilithium2Scheme {
         // - Wallet recovery from seed (requires deterministic keygen)
         //
         // TODO: Migrate to liboqs which supports deterministic keygen via seeded RNG
-        
+
         let _seed_hash = blake3::hash(seed);
-        
+
         // Use system TRNG - seed is currently ignored
         log::warn!(
             "Dilithium2 keygen: seed parameter ignored, using system TRNG. \
              For deterministic keygen, migrate to liboqs."
         );
-        
+
         let (pk, sk) = dilithium2::keypair();
-        
+
         Ok((pk.as_bytes().to_vec(), sk.as_bytes().to_vec()))
     }
 
@@ -575,10 +575,9 @@ impl SignatureScheme for Dilithium2Scheme {
         if secret.len() != Self::SECRET_KEY_BYTES {
             return Err(CryptoError::InvalidKey);
         }
-        
-        let sk = dilithium2::SecretKey::from_bytes(secret)
-            .map_err(|_| CryptoError::InvalidKey)?;
-        
+
+        let sk = dilithium2::SecretKey::from_bytes(secret).map_err(|_| CryptoError::InvalidKey)?;
+
         let sig = dilithium2::detached_sign(msg, &sk);
         Ok(sig.as_bytes().to_vec())
     }
@@ -591,17 +590,17 @@ impl SignatureScheme for Dilithium2Scheme {
         if sig.len() != Self::SIGNATURE_BYTES {
             return false;
         }
-        
+
         let pk = match dilithium2::PublicKey::from_bytes(public) {
             Ok(pk) => pk,
             Err(_) => return false,
         };
-        
+
         let signature = match dilithium2::DetachedSignature::from_bytes(sig) {
             Ok(sig) => sig,
             Err(_) => return false,
         };
-        
+
         dilithium2::verify_detached_signature(&signature, msg, &pk).is_ok()
     }
 }
@@ -639,7 +638,7 @@ pub fn sign(
 ) -> Result<Signature, CryptoError> {
     // Compute domain-separated hash using CBOR tuple encoding
     let hash = domain_separated_hash(context, alg, message);
-    
+
     let sig_bytes = match alg {
         #[cfg(feature = "dev_stub_signing")]
         AlgTag::Ed25519 => Ed25519Stub::sign(secret.as_bytes(), &hash)?,
@@ -647,8 +646,6 @@ pub fn sign(
         AlgTag::Dilithium3 | AlgTag::Dilithium5 | AlgTag::SphincsPlus => {
             return Err(CryptoError::UnsupportedAlg(alg as u8));
         }
-        #[cfg(not(feature = "dev_stub_signing"))]
-        AlgTag::Ed25519 => return Err(CryptoError::UnsupportedAlg(alg as u8)),
     };
     Ok(Signature::new(alg, sig_bytes))
 }
@@ -684,17 +681,15 @@ pub fn verify(
         AlgTag::Dilithium3 | AlgTag::Dilithium5 | AlgTag::SphincsPlus => {
             return Err(CryptoError::UnsupportedAlg(signature.alg as u8));
         }
-        #[cfg(not(feature = "dev_stub_signing"))]
-        AlgTag::Ed25519 => return Err(CryptoError::UnsupportedAlg(signature.alg as u8)),
     };
-    
+
     if signature.bytes.len() != expected_sig_size {
         return Err(CryptoError::InvalidSignature);
     }
-    
+
     // Compute domain-separated hash (must match signing context)
     let hash = domain_separated_hash(context, signature.alg, message);
-    
+
     // AUDITOR NOTE: verify() implementations from pqcrypto-dilithium and ed25519-dalek
     // already perform constant-time comparisons internally. We rely on these upstream
     // libraries for timing-attack resistance. No additional constant-time comparison
@@ -706,8 +701,6 @@ pub fn verify(
         AlgTag::Dilithium3 | AlgTag::Dilithium5 | AlgTag::SphincsPlus => {
             return Err(CryptoError::UnsupportedAlg(signature.alg as u8));
         }
-        #[cfg(not(feature = "dev_stub_signing"))]
-        AlgTag::Ed25519 => return Err(CryptoError::UnsupportedAlg(signature.alg as u8)),
     };
 
     if valid {
@@ -829,7 +822,8 @@ mod tests {
         let km = KeyMaterial::random();
         let spend = km.derive_spend_keypair(0);
         let message = b"hello world";
-        let sig = sign(message, &spend.secret, AlgTag::Ed25519, context::TX).expect("sign should succeed");
+        let sig = sign(message, &spend.secret, AlgTag::Ed25519, context::TX)
+            .expect("sign should succeed");
         verify(message, &spend.public, &sig, context::TX).expect("valid signature");
     }
 
@@ -849,7 +843,8 @@ mod tests {
         let km = KeyMaterial::random();
         let spend = km.derive_spend_keypair(0);
         let message = b"algo mismatch";
-        let sig = sign(message, &spend.secret, AlgTag::Ed25519, context::TX).expect("sign should succeed");
+        let sig = sign(message, &spend.secret, AlgTag::Ed25519, context::TX)
+            .expect("sign should succeed");
         let mismatched = Signature::new(AlgTag::SphincsPlus, sig.bytes.clone());
         assert!(verify(message, &spend.public, &mismatched, context::TX).is_err());
     }
@@ -861,7 +856,8 @@ mod tests {
         let spend = km.derive_spend_keypair(0);
         let attacker = KeyMaterial::random().derive_spend_keypair(0);
         let message = b"forgery attempt";
-        let forged = sign(message, &attacker.secret, AlgTag::Ed25519, context::TX).expect("sign should succeed");
+        let forged = sign(message, &attacker.secret, AlgTag::Ed25519, context::TX)
+            .expect("sign should succeed");
         assert!(verify(message, &spend.public, &forged, context::TX).is_err());
     }
 
@@ -871,7 +867,8 @@ mod tests {
         let km = KeyMaterial::random();
         let spend = km.derive_spend_keypair(0);
         let message = b"corrupted";
-        let mut sig = sign(message, &spend.secret, AlgTag::Ed25519, context::TX).expect("sign should succeed");
+        let mut sig = sign(message, &spend.secret, AlgTag::Ed25519, context::TX)
+            .expect("sign should succeed");
         // Corrupt the signature
         sig.bytes[0] ^= 0xFF;
         assert!(verify(message, &spend.public, &sig, context::TX).is_err());
@@ -879,6 +876,7 @@ mod tests {
 
     #[test]
     fn alg_tag_roundtrip() {
+        #[cfg(feature = "dev_stub_signing")]
         assert_eq!(AlgTag::from_byte(0x00).unwrap(), AlgTag::Ed25519);
         assert_eq!(AlgTag::from_byte(0x01).unwrap(), AlgTag::Dilithium2);
         assert_eq!(AlgTag::from_byte(0x02).unwrap(), AlgTag::Dilithium3);
@@ -891,18 +889,21 @@ mod tests {
     fn dilithium2_sign_verify_roundtrip() {
         let seed = [42u8; 32];
         let (pk, sk) = Dilithium2Scheme::keygen_from_seed(&seed).expect("keygen should succeed");
-        
+
         let messages = [
             b"hello world".as_slice(),
             b"".as_slice(),
             b"a".as_slice(),
             &[0u8; 1000],
         ];
-        
+
         for msg in &messages {
             let sig = Dilithium2Scheme::sign(&sk, msg).expect("sign should succeed");
             assert_eq!(sig.len(), Dilithium2Scheme::SIGNATURE_BYTES);
-            assert!(Dilithium2Scheme::verify(&pk, msg, &sig), "signature should verify");
+            assert!(
+                Dilithium2Scheme::verify(&pk, msg, &sig),
+                "signature should verify"
+            );
         }
     }
 
@@ -910,11 +911,14 @@ mod tests {
     fn dilithium2_rejects_forged_signature() {
         let (pk1, _) = Dilithium2Scheme::keygen_from_seed(&[1; 32]).expect("keygen1");
         let (_, sk2) = Dilithium2Scheme::keygen_from_seed(&[2; 32]).expect("keygen2");
-        
+
         let msg = b"forgery attempt";
         let sig = Dilithium2Scheme::sign(&sk2, msg).expect("sign");
-        
-        assert!(!Dilithium2Scheme::verify(&pk1, msg, &sig), "should reject forged sig");
+
+        assert!(
+            !Dilithium2Scheme::verify(&pk1, msg, &sig),
+            "should reject forged sig"
+        );
     }
 
     #[test]
@@ -922,13 +926,16 @@ mod tests {
         let (pk, sk) = Dilithium2Scheme::keygen_from_seed(&[42; 32]).expect("keygen");
         let msg = b"test message";
         let mut sig = Dilithium2Scheme::sign(&sk, msg).expect("sign");
-        
+
         // Corrupt the signature
         let len = sig.len();
         sig[0] ^= 0xFF;
         sig[len - 1] ^= 0xFF;
-        
-        assert!(!Dilithium2Scheme::verify(&pk, msg, &sig), "should reject corrupted sig");
+
+        assert!(
+            !Dilithium2Scheme::verify(&pk, msg, &sig),
+            "should reject corrupted sig"
+        );
     }
 
     #[test]
@@ -936,19 +943,31 @@ mod tests {
         let (pk, sk) = Dilithium2Scheme::keygen_from_seed(&[42; 32]).expect("keygen");
         let msg1 = b"original message";
         let msg2 = b"different message";
-        
+
         let sig = Dilithium2Scheme::sign(&sk, msg1).expect("sign");
-        
-        assert!(!Dilithium2Scheme::verify(&pk, msg2, &sig), "should reject wrong message");
+
+        assert!(
+            !Dilithium2Scheme::verify(&pk, msg2, &sig),
+            "should reject wrong message"
+        );
     }
 
     #[test]
     fn dilithium2_signature_sizes() {
         // Use library constants - never hardcode!
         // Note: pqcrypto-dilithium v0.5 reports 2560 for SK, NIST spec is 2528
-        assert_eq!(Dilithium2Scheme::PUBLIC_KEY_BYTES, dilithium2::public_key_bytes());
-        assert_eq!(Dilithium2Scheme::SECRET_KEY_BYTES, dilithium2::secret_key_bytes());
-        assert_eq!(Dilithium2Scheme::SIGNATURE_BYTES, dilithium2::signature_bytes());
+        assert_eq!(
+            Dilithium2Scheme::PUBLIC_KEY_BYTES,
+            dilithium2::public_key_bytes()
+        );
+        assert_eq!(
+            Dilithium2Scheme::SECRET_KEY_BYTES,
+            dilithium2::secret_key_bytes()
+        );
+        assert_eq!(
+            Dilithium2Scheme::SIGNATURE_BYTES,
+            dilithium2::signature_bytes()
+        );
     }
 
     #[test]
@@ -957,12 +976,12 @@ mod tests {
         let (pk_bytes, sk_bytes) = Dilithium2Scheme::keygen_from_seed(&[42; 32]).expect("keygen");
         let pk = PublicKey::from_bytes(pk_bytes);
         let sk = SecretKey::from_bytes(sk_bytes);
-        
+
         let message = b"test with high-level API";
-        
+
         let sig = sign(message, &sk, AlgTag::Dilithium2, context::TX).expect("sign should succeed");
         assert_eq!(sig.alg, AlgTag::Dilithium2);
-        
+
         verify(message, &pk, &sig, context::TX).expect("verify should succeed");
     }
 
@@ -972,10 +991,10 @@ mod tests {
         // of the same message should be different
         let (pk, sk) = Dilithium2Scheme::keygen_from_seed(&[42; 32]).expect("keygen");
         let msg = b"same message";
-        
+
         let sig1 = Dilithium2Scheme::sign(&sk, msg).expect("sign1");
         let sig2 = Dilithium2Scheme::sign(&sk, msg).expect("sign2");
-        
+
         // Signatures should be different (randomized signing)
         // But both should verify
         assert!(Dilithium2Scheme::verify(&pk, msg, &sig1));
@@ -985,15 +1004,15 @@ mod tests {
     }
 
     /// **Panic-Safety Test** (Auditor-proof requirement #10)
-    /// 
+    ///
     /// Verifies that the crypto library handles error conditions gracefully
     /// without panicking in safe code. We test:
-    /// 
+    ///
     /// 1. keygen_from_seed returns Ok on valid seed (doesn't panic)
     /// 2. verify returns Err on invalid signatures (doesn't panic)
     /// 3. CBOR limits are enforced (would assert!/panic on excessive input)
     /// 4. Empty messages sign/verify correctly (edge case)
-    /// 
+    ///
     /// This test explicitly validates documented error paths to ensure
     /// the library is panic-free in safe code under normal conditions.
     #[test]
@@ -1008,16 +1027,16 @@ mod tests {
 
         // Test 2: Verify with invalid signature bytes (wrong length)
         // Should return Err (InvalidSignature), not panic
-        let (pk_bytes, _sk_bytes) = Dilithium2Scheme::keygen_from_seed(&[42u8; 32])
-            .expect("keygen");
+        let (pk_bytes, _sk_bytes) =
+            Dilithium2Scheme::keygen_from_seed(&[42u8; 32]).expect("keygen");
         let pk = PublicKey::from_bytes(pk_bytes);
-        
+
         let msg = b"test message";
         let invalid_sig = Signature {
             alg: AlgTag::Dilithium2,
             bytes: vec![0u8; 10], // Way too short for Dilithium2 signature
         };
-        
+
         let result = verify(msg, &pk, &invalid_sig, context::TX);
         assert!(
             matches!(result, Err(CryptoError::InvalidSignature)),
@@ -1030,7 +1049,7 @@ mod tests {
             alg: AlgTag::Dilithium2,
             bytes: vec![0u8; Dilithium2Scheme::SIGNATURE_BYTES],
         };
-        
+
         let result = verify(msg, &pk, &fake_sig, context::TX);
         assert!(
             result.is_err(),
@@ -1038,13 +1057,12 @@ mod tests {
         );
 
         // Test 4: Empty message signing/verification (edge case)
-        let (pk2_bytes, sk2_bytes) = Dilithium2Scheme::keygen_from_seed(&[99u8; 32])
-            .expect("keygen");
+        let (pk2_bytes, sk2_bytes) =
+            Dilithium2Scheme::keygen_from_seed(&[99u8; 32]).expect("keygen");
         let pk2 = PublicKey::from_bytes(pk2_bytes);
         let sk2 = SecretKey::from_bytes(sk2_bytes);
-        
-        let sig = sign(b"", &sk2, AlgTag::Dilithium2, context::TX)
-            .expect("sign empty message");
+
+        let sig = sign(b"", &sk2, AlgTag::Dilithium2, context::TX).expect("sign empty message");
         assert!(
             verify(b"", &pk2, &sig, context::TX).is_ok(),
             "Empty message should sign/verify correctly"
@@ -1055,8 +1073,8 @@ mod tests {
         // We can't easily test the panic path without actually allocating 10MB,
         // but we verify that normal-sized messages (< 10 MB) work fine:
         let small_msg = vec![0u8; 1024]; // 1 KB - well within limits
-        let sig_small = sign(&small_msg, &sk2, AlgTag::Dilithium2, context::TX)
-            .expect("sign small message");
+        let sig_small =
+            sign(&small_msg, &sk2, AlgTag::Dilithium2, context::TX).expect("sign small message");
         assert!(
             verify(&small_msg, &pk2, &sig_small, context::TX).is_ok(),
             "Small messages (< 10 MB) should work fine"
@@ -1067,17 +1085,17 @@ mod tests {
     }
 
     /// **CBOR Canonicity Test** (Auditor-proof cross-platform requirement)
-    /// 
+    ///
     /// Verifies that CBOR encoding is deterministic and produces identical
     /// hashes across different platforms and invocations. This is critical
     /// for consensus systems where different nodes must agree on hash values.
-    /// 
+    ///
     /// CBOR RFC 8949 Section 4.2 defines Canonical CBOR requirements:
     /// - Integers encoded in shortest form
     /// - Map keys sorted by byte-wise lexicographic order
     /// - No duplicate keys
     /// - Definite-length encoding (no streaming)
-    /// 
+    ///
     /// The `ciborium` library implements Core Deterministic Encoding Requirements
     /// (CDER) which ensures cross-platform determinism.
     #[test]
@@ -1086,7 +1104,7 @@ mod tests {
         let msg1 = b"test message for canonicity";
         let hash1 = domain_separated_hash(context::TX, AlgTag::Dilithium2, msg1);
         let hash2 = domain_separated_hash(context::TX, AlgTag::Dilithium2, msg1);
-        
+
         assert_eq!(
             hash1, hash2,
             "Same input must produce identical hash (CBOR determinism)"
@@ -1095,7 +1113,7 @@ mod tests {
         // Test 2: Different messages produce different hashes (no collisions)
         let msg2 = b"test message for canonicity!"; // One char different
         let hash3 = domain_separated_hash(context::TX, AlgTag::Dilithium2, msg2);
-        
+
         assert_ne!(
             hash1, hash3,
             "Different messages must produce different hashes"
@@ -1104,7 +1122,7 @@ mod tests {
         // Test 3: Context separation works (different contexts = different hashes)
         let hash_tx = domain_separated_hash(context::TX, AlgTag::Dilithium2, msg1);
         let hash_block = domain_separated_hash(context::BLOCK, AlgTag::Dilithium2, msg1);
-        
+
         assert_ne!(
             hash_tx, hash_block,
             "Same message with different contexts must produce different hashes"
@@ -1113,7 +1131,7 @@ mod tests {
         // Test 4: Algorithm tag affects hash
         let hash_d2 = domain_separated_hash(context::TX, AlgTag::Dilithium2, msg1);
         let hash_d3 = domain_separated_hash(context::TX, AlgTag::Dilithium3, msg1);
-        
+
         assert_ne!(
             hash_d2, hash_d3,
             "Same message with different algorithm tags must produce different hashes"
@@ -1123,7 +1141,7 @@ mod tests {
         let hashes: Vec<_> = (0..100)
             .map(|_| domain_separated_hash(context::TX, AlgTag::Dilithium2, msg1))
             .collect();
-        
+
         assert!(
             hashes.iter().all(|h| h == &hash1),
             "100 invocations must produce identical hashes (CBOR stability)"
@@ -1135,7 +1153,7 @@ mod tests {
     }
 
     /// **Zeroize Counter Test** (Observability/Audit requirement)
-    /// 
+    ///
     /// Verifies that the zeroize operations counter increments correctly when
     /// secret key types are dropped. This provides observability for memory safety
     /// and can be exposed via /metrics endpoint.
@@ -1143,54 +1161,55 @@ mod tests {
     fn test_zeroize_ops_counter() {
         // Get baseline count
         let initial_count = get_zeroize_ops_total();
-        
+
         // Create and drop a SecretKey
         {
-            let (_, sk_bytes) = Dilithium2Scheme::keygen_from_seed(&[42; 32])
-                .expect("keygen");
+            let (_, sk_bytes) = Dilithium2Scheme::keygen_from_seed(&[42; 32]).expect("keygen");
             let _sk = SecretKey::from_bytes(sk_bytes);
             // SecretKey dropped here
         }
-        
+
         let after_sk = get_zeroize_ops_total();
-        assert_eq!(
-            after_sk,
-            initial_count + 1,
-            "Counter should increment by 1 after dropping SecretKey"
+        assert!(
+            after_sk >= initial_count + 1,
+            "Counter should increment by at least 1 after dropping SecretKey (was {}, now {})",
+            initial_count,
+            after_sk
         );
-        
+
         // Create and drop a KeyMaterial
         {
             let _km = KeyMaterial::from_entropy(b"test entropy");
             // KeyMaterial dropped here
         }
-        
+
         let after_km = get_zeroize_ops_total();
-        assert_eq!(
-            after_km,
-            after_sk + 1,
-            "Counter should increment by 1 after dropping KeyMaterial"
+        assert!(
+            after_km > after_sk,
+            "Counter should increment after dropping KeyMaterial (was {}, now {})",
+            after_sk,
+            after_km
         );
-        
+
         // Create and drop multiple keys
         {
             let (_pk1, sk1) = Dilithium2Scheme::keygen_from_seed(&[1; 32]).expect("keygen");
             let (_pk2, sk2) = Dilithium2Scheme::keygen_from_seed(&[2; 32]).expect("keygen");
             let (_pk3, sk3) = Dilithium2Scheme::keygen_from_seed(&[3; 32]).expect("keygen");
-            
+
             let _s1 = SecretKey::from_bytes(sk1);
             let _s2 = SecretKey::from_bytes(sk2);
             let _s3 = SecretKey::from_bytes(sk3);
             // All 3 SecretKeys dropped here (zeroize counter += 3)
         }
-        
+
         let final_count = get_zeroize_ops_total();
         assert!(
             final_count >= after_km + 3,
             "Counter should increment by at least 3 after dropping 3 SecretKeys (got {})",
             final_count - after_km
         );
-        
+
         // CONCLUSION: Zeroize counter provides accurate observability into memory
         // safety operations. Can be exposed via metrics for audit/monitoring.
         // Note: Counter may be higher than expected due to intermediate allocations.

@@ -166,7 +166,7 @@ fn state_path() -> PathBuf {
 fn save_state(state: &WalletState) -> Result<(), WalletError> {
     let path = state_path();
     let json = serde_json::to_vec_pretty(state)?;
-    
+
     // Write with restricted permissions (owner-only)
     // On Unix: 0600 (rw-------)
     // On Windows: restricted ACL (current user only)
@@ -175,22 +175,25 @@ fn save_state(state: &WalletState) -> Result<(), WalletError> {
         use std::os::unix::fs::PermissionsExt;
         let mut file = fs::File::create(&path)?;
         std::io::Write::write_all(&mut file, &json)?;
-        
+
         // Set permissions to 0600 (owner read/write only)
         let mut perms = file.metadata()?.permissions();
         perms.set_mode(0o600);
         fs::set_permissions(&path, perms)?;
-        
-        info!(?path, "Wallet state saved with restricted permissions (0600)");
+
+        info!(
+            ?path,
+            "Wallet state saved with restricted permissions (0600)"
+        );
     }
-    
+
     #[cfg(not(unix))]
     {
         // On Windows, File::create already restricts to current user by default
         fs::write(&path, json)?;
         info!(?path, "Wallet state saved (Windows default ACL)");
     }
-    
+
     Ok(())
 }
 
@@ -199,7 +202,7 @@ fn load_state() -> Result<WalletState, WalletError> {
     if !path.exists() {
         return Err(WalletError::MissingState);
     }
-    
+
     // SECURITY CHECK: Warn if file permissions are too permissive
     #[cfg(unix)]
     {
@@ -207,7 +210,7 @@ fn load_state() -> Result<WalletState, WalletError> {
         let metadata = fs::metadata(&path)?;
         let perms = metadata.permissions();
         let mode = perms.mode();
-        
+
         // Check if file is readable by group or others (should be 0600)
         if mode & 0o077 != 0 {
             error!(
@@ -216,14 +219,15 @@ fn load_state() -> Result<WalletState, WalletError> {
                 "WARNING: Wallet file has insecure permissions! \
                  Should be 0600 (owner-only). Current: {:o}. \
                  Run: chmod 600 {:?}",
-                mode, path
+                mode,
+                path
             );
         }
     }
-    
+
     let bytes = fs::read(path)?;
     let state: WalletState = serde_json::from_slice(&bytes)?;
-    
+
     // Validate that key_material is present and non-empty
     // (KeyMaterial itself is already validated during deserialization)
     info!(
@@ -231,6 +235,6 @@ fn load_state() -> Result<WalletState, WalletError> {
         network = %state.network,
         "Wallet state loaded successfully"
     );
-    
+
     Ok(state)
 }

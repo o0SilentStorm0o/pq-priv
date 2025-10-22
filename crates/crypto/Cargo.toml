@@ -6,12 +6,12 @@ license.workspace = true
 build = "build.rs"
 
 [features]
-# AUDITOR NOTE: default features MUST NOT include dev_stub_signing
-# dev_stub_signing is for development/testing only (non-PQC Ed25519)
+# SECURITY: The 'default' feature set excludes dev_stub_signing.
+# The dev_stub_signing feature is ONLY for development/testing (uses non-PQC Ed25519).
 default = []
 # Enable Ed25519 as a development stub for testing (NOT for production)
 # This feature will cause a compile error if enabled in release builds
-dev_stub_signing = []
+dev_stub_signing = ["ed25519-dalek"]
 
 [dependencies]
 blake3 = "1.5"
@@ -25,7 +25,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_bytes = "0.11"
 sha3 = "0.10"
 thiserror = "1.0"
-ed25519-dalek = "2.1"
+ed25519-dalek = { version = "2.1", optional = true }
 pqcrypto-dilithium = "0.5"
 pqcrypto-traits = "0.3"
 zeroize = { version = "1.7", features = ["derive"] }
