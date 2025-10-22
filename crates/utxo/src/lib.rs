@@ -226,8 +226,13 @@ fn consume_inputs<B: UtxoBackend>(
             return Err(UtxoError::MissingOutPoint(outpoint));
         }
         let message = tx::input_auth_message(input, binding_hash);
-        crypto::verify(&message, &input.spend_public, &input.pq_signature)
-            .map_err(|_| UtxoError::InvalidSignature)?;
+        crypto::verify(
+            &message,
+            &input.spend_public,
+            &input.pq_signature,
+            crypto::context::TX,
+        )
+        .map_err(|_| UtxoError::InvalidSignature)?;
         consumed.push(outpoint);
         new_tags.push(input.ann_link_tag);
     }

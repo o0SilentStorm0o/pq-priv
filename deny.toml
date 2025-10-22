@@ -1,5 +1,11 @@
 [advisories]
-ignore = []
+# Note: We migrated from pqcrypto-dilithium to pqcrypto-mldsa (NIST ML-DSA standard)
+# RUSTSEC-2024-0436: paste crate is unmaintained but has no security vulnerabilities
+# It's a transitive dependency from pqcrypto-mldsa and cannot be avoided until
+# pqcrypto-mldsa updates or we find an alternative PQC library
+ignore = [
+    "RUSTSEC-2024-0436", # paste - unmaintained (transitive dep from pqcrypto-mldsa)
+]
 
 [licenses]
 allow = [

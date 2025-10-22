@@ -1,0 +1,94 @@
+# End-to-End Cryptography Testing with Docker
+
+version: '3.8'
+
+services:
+  # Node A: Uses Dilithium2 for all signatures
+  node_a_dilithium:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+    container_name: pq_node_a_dilithium
+    environment:
+      - NODE_NAME=node_a_dilithium
+      - LISTEN_ADDR=0.0.0.0:9000
+      - RPC_ADDR=0.0.0.0:8545
+      - BOOTSTRAP_PEERS=
+      - RUST_LOG=info,node=debug
+      - CRYPTO_ALGORITHM=dilithium2
+    ports:
+      - "9000:9000"
+      - "8545:8545"
+    volumes:
+      - node_a_dilithium_data:/data
+    networks:
+      - pq_test_net
+    command: >
+      sh -c "
+        echo 'Node A (Dilithium2) starting...' &&
+        /usr/local/bin/node --data-dir /data
+      "
+
+  # Node B: Uses Dilithium2, connects to Node A
+  node_b_dilithium:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+    container_name: pq_node_b_dilithium
+    environment:
+      - NODE_NAME=node_b_dilithium
+      - LISTEN_ADDR=0.0.0.0:9001
+      - RPC_ADDR=0.0.0.0:8546
+      - BOOTSTRAP_PEERS=/ip4/node_a_dilithium/tcp/9000
+      - RUST_LOG=info,node=debug
+      - CRYPTO_ALGORITHM=dilithium2
+    ports:
+      - "9001:9001"
+      - "8546:8546"
+    volumes:
+      - node_b_dilithium_data:/data
+    networks:
+      - pq_test_net
+    depends_on:
+      - node_a_dilithium
+    command: >
+      sh -c "
+        echo 'Waiting for Node A to be ready...' &&
+        sleep 5 &&
+        echo 'Node B (Dilithium2) starting...' &&
+        /usr/local/bin/node --data-dir /data
+      "
+
+  # Test runner: Sends transactions and verifies signatures
+  crypto_tester:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+    container_name: pq_crypto_tester
+    environment:
+      - RUST_LOG=debug
+      - NODE_A_RPC=http://node_a_dilithium:8545
+      - NODE_B_RPC=http://node_b_dilithium:8546
+    networks:
+      - pq_test_net
+    depends_on:
+      - node_a_dilithium
+      - node_b_dilithium
+    command: >
+      sh -c "
+        echo 'Waiting for nodes to be ready...' &&
+        sleep 10 &&
+        echo 'Running crypto integration tests...' &&
+        cargo test --package crypto --test integration --release -- --nocapture &&
+        cargo test --package tx --test integration --release -- --nocapture &&
+        echo 'All crypto tests passed!' &&
+        tail -f /dev/null
+      "
+
+volumes:
+  node_a_dilithium_data:
+  node_b_dilithium_data:
+
+networks:
+  pq_test_net:
+    driver: bridge
