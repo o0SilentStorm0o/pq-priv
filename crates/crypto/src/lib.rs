@@ -15,6 +15,7 @@
 //! - **Strict Validation**: All deserializations enforce exact length checks
 
 use std::convert::TryInto;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use blake3::derive_key;
@@ -30,13 +31,91 @@ use rand::rngs::OsRng;
 use rand_chacha::ChaCha20Rng;
 #[cfg(feature = "dev_stub_signing")]
 use rand_core::SeedableRng;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
+use std::time::Instant;
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 
 /// Length (in bytes) of keys and tags produced by the placeholder scheme.
 pub const KEY_LEN: usize = 32;
+
+/// Maximum allowed message length for signature verification (16 MB).
+/// Protects against DoS attacks via extremely large messages.
+pub const MAX_MESSAGE_LEN: usize = 16 * 1024 * 1024;
+
+/// Maximum batch size for batch_verify operations (100,000 items).
+/// Protects against DoS attacks via oversized batches.
+pub const DEFAULT_MAX_BATCH_SIZE: usize = 100_000;
+
+/// Default threshold for switching from sequential to parallel verification.
+/// Batches smaller than this use sequential verification to avoid Rayon overhead.
+const DEFAULT_VERIFY_THRESHOLD: usize = 32;
+
+/// Batch verification configuration (lazy-initialized from ENV).
+struct BatchVerifyConfig {
+    /// Number of threads for parallel verification (1 to num_cpus)
+    threads: usize,
+    /// Threshold for parallel/sequential switch
+    threshold: usize,
+    /// Maximum batch size
+    max_batch_size: usize,
+}
+
+static BATCH_CONFIG: OnceLock<BatchVerifyConfig> = OnceLock::new();
+
+/// Get or initialize batch verification configuration from environment variables.
+///
+/// ENV variables (all optional):
+/// - `CRYPTO_VERIFY_THREADS`: Number of threads (default: min(8, num_cpus))
+/// - `CRYPTO_VERIFY_THRESHOLD`: Parallel threshold (default: 32)
+/// - `CRYPTO_MAX_BATCH_SIZE`: Max batch size (default: 100,000)
+fn batch_config() -> &'static BatchVerifyConfig {
+    BATCH_CONFIG.get_or_init(|| {
+        let num_cpus = num_cpus::get();
+
+        let threads = std::env::var("CRYPTO_VERIFY_THREADS")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or_else(|| num_cpus.min(8))
+            .max(1)
+            .min(num_cpus);
+
+        let threshold = std::env::var("CRYPTO_VERIFY_THRESHOLD")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_VERIFY_THRESHOLD)
+            .max(1);
+
+        let max_batch_size = std::env::var("CRYPTO_MAX_BATCH_SIZE")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_MAX_BATCH_SIZE)
+            .max(1);
+
+        BatchVerifyConfig {
+            threads,
+            threshold,
+            max_batch_size,
+        }
+    })
+}
+
+/// Get the configured number of verification threads.
+pub fn get_verify_threads() -> usize {
+    batch_config().threads
+}
+
+/// Get the configured parallel verification threshold.
+pub fn get_verify_threshold() -> usize {
+    batch_config().threshold
+}
+
+/// Get the configured maximum batch size.
+pub fn get_max_batch_size() -> usize {
+    batch_config().max_batch_size
+}
 
 /// Global counter for zeroize operations (observability/audit metric).
 ///
@@ -65,6 +144,44 @@ pub fn get_zeroize_ops_total() -> u64 {
 fn increment_zeroize_counter() {
     ZEROIZE_OPS_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
+
+// ============================================================================
+// BATCH VERIFY METRICS (Sprint 6)
+// ============================================================================
+
+/// Total number of batch_verify_v2() invocations.
+static BATCH_VERIFY_CALLS_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+/// Total number of signatures processed by batch_verify_v2().
+static BATCH_VERIFY_ITEMS_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+/// Total number of invalid signatures detected.
+static BATCH_VERIFY_INVALID_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+/// Total time spent in batch_verify_v2() in microseconds.
+static BATCH_VERIFY_DURATION_US_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+/// Get the total number of batch_verify_v2() calls.
+pub fn get_batch_verify_calls_total() -> u64 {
+    BATCH_VERIFY_CALLS_TOTAL.load(Ordering::Relaxed)
+}
+
+/// Get the total number of signatures processed by batch verify.
+pub fn get_batch_verify_items_total() -> u64 {
+    BATCH_VERIFY_ITEMS_TOTAL.load(Ordering::Relaxed)
+}
+
+/// Get the total number of invalid signatures detected.
+pub fn get_batch_verify_invalid_total() -> u64 {
+    BATCH_VERIFY_INVALID_TOTAL.load(Ordering::Relaxed)
+}
+
+/// Get the total time spent in batch verify (microseconds).
+pub fn get_batch_verify_duration_us_total() -> u64 {
+    BATCH_VERIFY_DURATION_US_TOTAL.load(Ordering::Relaxed)
+}
+
+// ============================================================================
 
 /// Type-safe domain separation context.
 ///
@@ -247,8 +364,9 @@ pub fn domain_separated_hash(context: Context, alg: AlgTag, msg: &[u8]) -> [u8; 
     );
 
     // CBOR encode with deterministic (canonical) encoding
-    let mut cbor_bytes = Vec::new();
-    ciborium::into_writer(&tuple, &mut cbor_bytes)
+    // Use Zeroizing to ensure CBOR buffer (which contains raw message data) is wiped
+    let mut cbor_bytes = Zeroizing::new(Vec::new());
+    ciborium::into_writer(&tuple, cbor_bytes.as_mut() as &mut Vec<u8>)
         .expect("CBOR encoding should not fail for simple tuple");
 
     // Validate CBOR output length (final defensive check)
@@ -707,6 +825,240 @@ pub fn verify(
         Ok(())
     } else {
         Err(CryptoError::InvalidSignature)
+    }
+}
+
+// ============================================================================
+// Batch Verification API (Sprint 6)
+// ============================================================================
+
+/// Single item for batch signature verification.
+///
+/// Contains all necessary data to verify one signature in a batch.
+/// All fields are validated before batch processing begins.
+#[derive(Debug, Clone)]
+pub struct VerifyItem<'a> {
+    /// Domain separation context (e.g., context::TX)
+    pub context: Context,
+    /// Algorithm tag (must match signature algorithm)
+    pub alg: AlgTag,
+    /// Public key bytes (must match expected size for algorithm)
+    pub public: &'a [u8],
+    /// Message to verify (already domain-separated if precomputed)
+    pub msg: &'a [u8],
+    /// Signature bytes (must match expected size for algorithm)
+    pub sig: &'a [u8],
+}
+
+impl<'a> VerifyItem<'a> {
+    /// Create a new verify item with validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CryptoError::InvalidInput` if:
+    /// - Message exceeds MAX_MESSAGE_LEN
+    /// - Public key or signature size doesn't match algorithm
+    pub fn new(
+        context: Context,
+        alg: AlgTag,
+        public: &'a [u8],
+        msg: &'a [u8],
+        sig: &'a [u8],
+    ) -> Result<Self, CryptoError> {
+        // Validate message length
+        if msg.len() > MAX_MESSAGE_LEN {
+            return Err(CryptoError::InvalidInput);
+        }
+
+        // Validate public key and signature sizes
+        let expected_pub_size = match alg {
+            #[cfg(feature = "dev_stub_signing")]
+            AlgTag::Ed25519 => Ed25519Stub::PUBLIC_KEY_BYTES,
+            AlgTag::Dilithium2 => Dilithium2Scheme::PUBLIC_KEY_BYTES,
+            AlgTag::Dilithium3 | AlgTag::Dilithium5 | AlgTag::SphincsPlus => {
+                return Err(CryptoError::UnsupportedAlg(alg as u8));
+            }
+        };
+
+        let expected_sig_size = match alg {
+            #[cfg(feature = "dev_stub_signing")]
+            AlgTag::Ed25519 => Ed25519Stub::SIGNATURE_BYTES,
+            AlgTag::Dilithium2 => Dilithium2Scheme::SIGNATURE_BYTES,
+            AlgTag::Dilithium3 | AlgTag::Dilithium5 | AlgTag::SphincsPlus => {
+                return Err(CryptoError::UnsupportedAlg(alg as u8));
+            }
+        };
+
+        if public.len() != expected_pub_size {
+            return Err(CryptoError::InvalidInput);
+        }
+
+        if sig.len() != expected_sig_size {
+            return Err(CryptoError::InvalidInput);
+        }
+
+        Ok(Self {
+            context,
+            alg,
+            public,
+            msg,
+            sig,
+        })
+    }
+}
+
+/// Outcome of batch verification operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatchVerifyOutcome {
+    /// All signatures in the batch are valid
+    AllValid,
+    /// Some signatures are invalid (count of invalid signatures)
+    SomeInvalid(usize),
+}
+
+impl BatchVerifyOutcome {
+    /// Check if all signatures were valid
+    pub fn is_all_valid(&self) -> bool {
+        matches!(self, Self::AllValid)
+    }
+
+    /// Get count of invalid signatures (0 if all valid)
+    pub fn invalid_count(&self) -> usize {
+        match self {
+            Self::AllValid => 0,
+            Self::SomeInvalid(n) => *n,
+        }
+    }
+}
+
+/// Verify a single item (internal helper for batch verification).
+///
+/// This performs domain separation and calls the underlying verify implementation.
+/// Uses Zeroizing for temporary hash buffer.
+fn verify_one_item(item: &VerifyItem) -> bool {
+    // Compute domain-separated hash with zeroizing buffer
+    let hash = domain_separated_hash(item.context, item.alg, item.msg);
+
+    // Verify signature using algorithm-specific implementation
+    match item.alg {
+        #[cfg(feature = "dev_stub_signing")]
+        AlgTag::Ed25519 => Ed25519Stub::verify(item.public, &hash, item.sig),
+        AlgTag::Dilithium2 => Dilithium2Scheme::verify(item.public, &hash, item.sig),
+        AlgTag::Dilithium3 | AlgTag::Dilithium5 | AlgTag::SphincsPlus => false,
+    }
+}
+
+/// Batch signature verification with parallel processing.
+///
+/// Verifies multiple signatures in parallel using Rayon when batch size exceeds
+/// the configured threshold. Falls back to sequential verification for small batches.
+///
+/// # Arguments
+///
+/// * `items` - Iterator of `VerifyItem` to verify
+///
+/// # Returns
+///
+/// * `BatchVerifyOutcome::AllValid` - All signatures valid
+/// * `BatchVerifyOutcome::SomeInvalid(n)` - n signatures invalid
+///
+/// # Security
+///
+/// - All items are pre-validated (lengths, algorithm support)
+/// - Uses domain separation for all verifications
+/// - Deterministic result (order-independent)
+/// - Protected against DoS via MAX_BATCH_SIZE limit
+///
+/// # Performance
+///
+/// - Sequential: `n < threshold` (default 32)
+/// - Parallel: `n >= threshold` using Rayon thread pool
+/// - Thread count: Configured via CRYPTO_VERIFY_THREADS
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use crypto::{VerifyItem, batch_verify_v2, context};
+///
+/// let items = vec![
+///     VerifyItem::new(context::TX, AlgTag::Dilithium2, &pub1, &msg1, &sig1)?,
+///     VerifyItem::new(context::TX, AlgTag::Dilithium2, &pub2, &msg2, &sig2)?,
+/// ];
+///
+/// match batch_verify_v2(items) {
+///     BatchVerifyOutcome::AllValid => println!("All valid"),
+///     BatchVerifyOutcome::SomeInvalid(n) => println!("{} invalid", n),
+/// }
+/// ```
+pub fn batch_verify_v2<'a>(items: impl IntoIterator<Item = VerifyItem<'a>>) -> BatchVerifyOutcome {
+    let start = Instant::now();
+
+    // Increment call counter
+    BATCH_VERIFY_CALLS_TOTAL.fetch_add(1, Ordering::Relaxed);
+
+    let items_vec: Vec<_> = items.into_iter().collect();
+
+    // Empty batch is trivially valid
+    if items_vec.is_empty() {
+        let duration_us = start.elapsed().as_micros() as u64;
+        BATCH_VERIFY_DURATION_US_TOTAL.fetch_add(duration_us, Ordering::Relaxed);
+        return BatchVerifyOutcome::AllValid;
+    }
+
+    // Record number of items
+    BATCH_VERIFY_ITEMS_TOTAL.fetch_add(items_vec.len() as u64, Ordering::Relaxed);
+
+    // Enforce maximum batch size (DoS protection)
+    let max_size = get_max_batch_size();
+    if items_vec.len() > max_size {
+        log::error!(
+            "Batch size {} exceeds maximum {}, rejecting entire batch",
+            items_vec.len(),
+            max_size
+        );
+        BATCH_VERIFY_INVALID_TOTAL.fetch_add(items_vec.len() as u64, Ordering::Relaxed);
+        let duration_us = start.elapsed().as_micros() as u64;
+        BATCH_VERIFY_DURATION_US_TOTAL.fetch_add(duration_us, Ordering::Relaxed);
+        return BatchVerifyOutcome::SomeInvalid(items_vec.len());
+    }
+
+    let config = batch_config();
+    let use_parallel = items_vec.len() >= config.threshold && config.threads > 1;
+
+    log::trace!(
+        "Batch verify: {} items, parallel={}, threads={}, threshold={}",
+        items_vec.len(),
+        use_parallel,
+        config.threads,
+        config.threshold
+    );
+
+    // Count invalid signatures
+    let invalid_count: usize = if use_parallel {
+        // Parallel verification with Rayon
+        items_vec
+            .par_iter()
+            .map(|item| !verify_one_item(item) as usize)
+            .sum()
+    } else {
+        // Sequential verification
+        items_vec
+            .iter()
+            .map(|item| !verify_one_item(item) as usize)
+            .sum()
+    };
+
+    // Record invalid count and duration
+    if invalid_count > 0 {
+        BATCH_VERIFY_INVALID_TOTAL.fetch_add(invalid_count as u64, Ordering::Relaxed);
+    }
+    let duration_us = start.elapsed().as_micros() as u64;
+    BATCH_VERIFY_DURATION_US_TOTAL.fetch_add(duration_us, Ordering::Relaxed);
+
+    if invalid_count == 0 {
+        BatchVerifyOutcome::AllValid
+    } else {
+        BatchVerifyOutcome::SomeInvalid(invalid_count)
     }
 }
 
@@ -1213,5 +1565,109 @@ mod tests {
         // CONCLUSION: Zeroize counter provides accurate observability into memory
         // safety operations. Can be exposed via metrics for audit/monitoring.
         // Note: Counter may be higher than expected due to intermediate allocations.
+    }
+
+    #[test]
+    fn batch_verify_metrics_are_recorded() {
+        // Test that batch_verify_v2() updates metrics correctly
+        let seed = [42u8; 32];
+        let (pk_bytes, sk_bytes) = Dilithium2Scheme::keygen_from_seed(&seed).expect("keygen");
+
+        let public = PublicKey::from_bytes(pk_bytes);
+        let secret = SecretKey::from_bytes(sk_bytes);
+
+        // Record baseline metrics
+        let calls_before = get_batch_verify_calls_total();
+        let items_before = get_batch_verify_items_total();
+        let invalid_before = get_batch_verify_invalid_total();
+        let duration_before = get_batch_verify_duration_us_total();
+
+        // Create a batch with 3 valid signatures
+        let count = 3;
+        let mut publics = Vec::new();
+        let mut secrets = Vec::new();
+        let mut messages = Vec::new();
+        let mut sigs = Vec::new();
+
+        for i in 0..count {
+            let seed_i = [i as u8; 32];
+            let (pk, sk) = Dilithium2Scheme::keygen_from_seed(&seed_i).expect("keygen");
+            publics.push(PublicKey::from_bytes(pk));
+            secrets.push(SecretKey::from_bytes(sk));
+            messages.push(format!("Message {}", i).into_bytes());
+        }
+
+        for i in 0..count {
+            let sig = sign(&messages[i], &secrets[i], AlgTag::Dilithium2, context::TX)
+                .expect("signing should succeed");
+            sigs.push(sig);
+        }
+
+        let mut items = Vec::new();
+        for i in 0..count {
+            let item = VerifyItem::new(
+                context::TX,
+                AlgTag::Dilithium2,
+                publics[i].as_bytes(),
+                &messages[i],
+                &sigs[i].bytes,
+            )
+            .expect("VerifyItem creation should succeed");
+            items.push(item);
+        }
+
+        // Call batch_verify_v2
+        let outcome = batch_verify_v2(items);
+        assert_eq!(outcome, BatchVerifyOutcome::AllValid);
+
+        // Check metrics were updated
+        let calls_after = get_batch_verify_calls_total();
+        let items_after = get_batch_verify_items_total();
+        let invalid_after = get_batch_verify_invalid_total();
+        let duration_after = get_batch_verify_duration_us_total();
+
+        assert_eq!(
+            calls_after,
+            calls_before + 1,
+            "calls counter should increment by 1"
+        );
+        assert_eq!(
+            items_after,
+            items_before + 3,
+            "items counter should increment by 3"
+        );
+        assert_eq!(
+            invalid_after, invalid_before,
+            "invalid counter should not change (all valid)"
+        );
+        assert!(duration_after > duration_before, "duration should increase");
+
+        // Test invalid signature increments invalid counter
+        let invalid_before2 = get_batch_verify_invalid_total();
+
+        // Create one invalid signature (sign with one message, verify with different)
+        let signed_msg = b"Original".to_vec();
+        let sig_bad = sign(&signed_msg, &secret, AlgTag::Dilithium2, context::TX)
+            .expect("signing should succeed");
+        let verify_msg = b"Different".to_vec();
+
+        let item_bad = VerifyItem::new(
+            context::TX,
+            AlgTag::Dilithium2,
+            public.as_bytes(),
+            &verify_msg,
+            &sig_bad.bytes,
+        )
+        .expect("VerifyItem creation should succeed");
+
+        let outcome_bad = batch_verify_v2(vec![item_bad]);
+        assert_eq!(outcome_bad, BatchVerifyOutcome::SomeInvalid(1));
+
+        let invalid_after2 = get_batch_verify_invalid_total();
+        assert_eq!(
+            invalid_after2,
+            invalid_before2 + 1,
+            "invalid counter should increment by 1"
+        );
     }
 }

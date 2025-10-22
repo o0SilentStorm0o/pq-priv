@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use consensus::Block;
+use crypto::{self, VerifyItem};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tx::{self, Output, Tx};
@@ -207,6 +208,8 @@ fn consume_inputs<B: UtxoBackend>(
     block_tags: &mut HashSet<[u8; 32]>,
     new_tags: &mut Vec<[u8; 32]>,
 ) -> Result<(), UtxoError> {
+    // ==== PHASE 1: Pre-validation (non-cryptographic checks) ====
+    // Validate all inputs before expensive signature verification
     for input in &tx.inputs {
         if input.one_of_many_proof.is_empty() {
             return Err(UtxoError::InvalidProof);
@@ -225,6 +228,42 @@ fn consume_inputs<B: UtxoBackend>(
         if store.get(&outpoint)?.is_none() {
             return Err(UtxoError::MissingOutPoint(outpoint));
         }
+    }
+
+    // ==== PHASE 2: Batch signature verification (cryptographic) ====
+    // Collect all messages for batch verification (if multiple inputs)
+    if tx.inputs.len() > 1 {
+        // Batch path: collect all messages and verify in parallel
+        let mut messages = Vec::with_capacity(tx.inputs.len());
+        let mut verify_items = Vec::with_capacity(tx.inputs.len());
+
+        // Compute messages for all inputs
+        for input in &tx.inputs {
+            let message = tx::input_auth_message(input, binding_hash);
+            messages.push(message);
+        }
+
+        // Create VerifyItems
+        for (i, input) in tx.inputs.iter().enumerate() {
+            let item = VerifyItem::new(
+                crypto::context::TX,
+                input.pq_signature.alg,
+                input.spend_public.as_bytes(),
+                &messages[i],
+                &input.pq_signature.bytes,
+            )
+            .map_err(|_| UtxoError::InvalidSignature)?;
+            verify_items.push(item);
+        }
+
+        // Batch verify all signatures
+        let outcome = crypto::batch_verify_v2(verify_items);
+        if !outcome.is_all_valid() {
+            return Err(UtxoError::InvalidSignature);
+        }
+    } else if tx.inputs.len() == 1 {
+        // Single input: use regular verify (no batch overhead)
+        let input = &tx.inputs[0];
         let message = tx::input_auth_message(input, binding_hash);
         crypto::verify(
             &message,
@@ -233,9 +272,16 @@ fn consume_inputs<B: UtxoBackend>(
             crypto::context::TX,
         )
         .map_err(|_| UtxoError::InvalidSignature)?;
+    }
+    // else: no inputs, nothing to verify
+
+    // ==== PHASE 3: Record consumed outputs and link tags ====
+    for input in &tx.inputs {
+        let outpoint = OutPoint::new(input.prev_txid, input.prev_index);
         consumed.push(outpoint);
         new_tags.push(input.ann_link_tag);
     }
+
     Ok(())
 }
 
