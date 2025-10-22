@@ -34,6 +34,7 @@ use rand_core::SeedableRng;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
+use std::time::Instant;
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 
@@ -143,6 +144,44 @@ pub fn get_zeroize_ops_total() -> u64 {
 fn increment_zeroize_counter() {
     ZEROIZE_OPS_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
+
+// ============================================================================
+// BATCH VERIFY METRICS (Sprint 6)
+// ============================================================================
+
+/// Total number of batch_verify_v2() invocations.
+static BATCH_VERIFY_CALLS_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+/// Total number of signatures processed by batch_verify_v2().
+static BATCH_VERIFY_ITEMS_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+/// Total number of invalid signatures detected.
+static BATCH_VERIFY_INVALID_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+/// Total time spent in batch_verify_v2() in microseconds.
+static BATCH_VERIFY_DURATION_US_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+/// Get the total number of batch_verify_v2() calls.
+pub fn get_batch_verify_calls_total() -> u64 {
+    BATCH_VERIFY_CALLS_TOTAL.load(Ordering::Relaxed)
+}
+
+/// Get the total number of signatures processed by batch verify.
+pub fn get_batch_verify_items_total() -> u64 {
+    BATCH_VERIFY_ITEMS_TOTAL.load(Ordering::Relaxed)
+}
+
+/// Get the total number of invalid signatures detected.
+pub fn get_batch_verify_invalid_total() -> u64 {
+    BATCH_VERIFY_INVALID_TOTAL.load(Ordering::Relaxed)
+}
+
+/// Get the total time spent in batch verify (microseconds).
+pub fn get_batch_verify_duration_us_total() -> u64 {
+    BATCH_VERIFY_DURATION_US_TOTAL.load(Ordering::Relaxed)
+}
+
+// ============================================================================
 
 /// Type-safe domain separation context.
 ///
@@ -953,12 +992,22 @@ fn verify_one_item(item: &VerifyItem) -> bool {
 pub fn batch_verify_v2<'a>(
     items: impl IntoIterator<Item = VerifyItem<'a>>,
 ) -> BatchVerifyOutcome {
+    let start = Instant::now();
+
+    // Increment call counter
+    BATCH_VERIFY_CALLS_TOTAL.fetch_add(1, Ordering::Relaxed);
+
     let items_vec: Vec<_> = items.into_iter().collect();
 
     // Empty batch is trivially valid
     if items_vec.is_empty() {
+        let duration_us = start.elapsed().as_micros() as u64;
+        BATCH_VERIFY_DURATION_US_TOTAL.fetch_add(duration_us, Ordering::Relaxed);
         return BatchVerifyOutcome::AllValid;
     }
+
+    // Record number of items
+    BATCH_VERIFY_ITEMS_TOTAL.fetch_add(items_vec.len() as u64, Ordering::Relaxed);
 
     // Enforce maximum batch size (DoS protection)
     let max_size = get_max_batch_size();
@@ -968,6 +1017,9 @@ pub fn batch_verify_v2<'a>(
             items_vec.len(),
             max_size
         );
+        BATCH_VERIFY_INVALID_TOTAL.fetch_add(items_vec.len() as u64, Ordering::Relaxed);
+        let duration_us = start.elapsed().as_micros() as u64;
+        BATCH_VERIFY_DURATION_US_TOTAL.fetch_add(duration_us, Ordering::Relaxed);
         return BatchVerifyOutcome::SomeInvalid(items_vec.len());
     }
 
@@ -996,6 +1048,13 @@ pub fn batch_verify_v2<'a>(
             .map(|item| !verify_one_item(item) as usize)
             .sum()
     };
+
+    // Record invalid count and duration
+    if invalid_count > 0 {
+        BATCH_VERIFY_INVALID_TOTAL.fetch_add(invalid_count as u64, Ordering::Relaxed);
+    }
+    let duration_us = start.elapsed().as_micros() as u64;
+    BATCH_VERIFY_DURATION_US_TOTAL.fetch_add(duration_us, Ordering::Relaxed);
 
     if invalid_count == 0 {
         BatchVerifyOutcome::AllValid
@@ -1507,5 +1566,94 @@ mod tests {
         // CONCLUSION: Zeroize counter provides accurate observability into memory
         // safety operations. Can be exposed via metrics for audit/monitoring.
         // Note: Counter may be higher than expected due to intermediate allocations.
+    }
+
+    #[test]
+    fn batch_verify_metrics_are_recorded() {
+        // Test that batch_verify_v2() updates metrics correctly
+        let seed = [42u8; 32];
+        let (pk_bytes, sk_bytes) = Dilithium2Scheme::keygen_from_seed(&seed).expect("keygen");
+
+        let public = PublicKey::from_bytes(pk_bytes);
+        let secret = SecretKey::from_bytes(sk_bytes);
+
+        // Record baseline metrics
+        let calls_before = get_batch_verify_calls_total();
+        let items_before = get_batch_verify_items_total();
+        let invalid_before = get_batch_verify_invalid_total();
+        let duration_before = get_batch_verify_duration_us_total();
+
+        // Create a batch with 3 valid signatures
+        let count = 3;
+        let mut publics = Vec::new();
+        let mut secrets = Vec::new();
+        let mut messages = Vec::new();
+        let mut sigs = Vec::new();
+
+        for i in 0..count {
+            let seed_i = [i as u8; 32];
+            let (pk, sk) = Dilithium2Scheme::keygen_from_seed(&seed_i).expect("keygen");
+            publics.push(PublicKey::from_bytes(pk));
+            secrets.push(SecretKey::from_bytes(sk));
+            messages.push(format!("Message {}", i).into_bytes());
+        }
+
+        for i in 0..count {
+            let sig = sign(&messages[i], &secrets[i], AlgTag::Dilithium2, context::TX)
+                .expect("signing should succeed");
+            sigs.push(sig);
+        }
+
+        let mut items = Vec::new();
+        for i in 0..count {
+            let item = VerifyItem::new(
+                context::TX,
+                AlgTag::Dilithium2,
+                publics[i].as_bytes(),
+                &messages[i],
+                &sigs[i].bytes,
+            )
+            .expect("VerifyItem creation should succeed");
+            items.push(item);
+        }
+
+        // Call batch_verify_v2
+        let outcome = batch_verify_v2(items);
+        assert_eq!(outcome, BatchVerifyOutcome::AllValid);
+
+        // Check metrics were updated
+        let calls_after = get_batch_verify_calls_total();
+        let items_after = get_batch_verify_items_total();
+        let invalid_after = get_batch_verify_invalid_total();
+        let duration_after = get_batch_verify_duration_us_total();
+
+        assert_eq!(calls_after, calls_before + 1, "calls counter should increment by 1");
+        assert_eq!(items_after, items_before + 3, "items counter should increment by 3");
+        assert_eq!(invalid_after, invalid_before, "invalid counter should not change (all valid)");
+        assert!(duration_after > duration_before, "duration should increase");
+
+        // Test invalid signature increments invalid counter
+        let invalid_before2 = get_batch_verify_invalid_total();
+
+        // Create one invalid signature (sign with one message, verify with different)
+        let signed_msg = b"Original".to_vec();
+        let sig_bad = sign(&signed_msg, &secret, AlgTag::Dilithium2, context::TX)
+            .expect("signing should succeed");
+        let verify_msg = b"Different".to_vec();
+
+        let item_bad = VerifyItem::new(
+            context::TX,
+            AlgTag::Dilithium2,
+            public.as_bytes(),
+            &verify_msg,
+            &sig_bad.bytes,
+        )
+        .expect("VerifyItem creation should succeed");
+
+        let outcome_bad = batch_verify_v2(vec![item_bad]);
+        assert_eq!(outcome_bad, BatchVerifyOutcome::SomeInvalid(1));
+
+        let invalid_after2 = get_batch_verify_invalid_total();
+        assert_eq!(invalid_after2, invalid_before2 + 1, "invalid counter should increment by 1");
     }
 }
