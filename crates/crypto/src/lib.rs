@@ -788,6 +788,222 @@ pub fn verify(
     }
 }
 
+// ============================================================================
+// Batch Verification API (Sprint 6)
+// ============================================================================
+
+/// Single item for batch signature verification.
+///
+/// Contains all necessary data to verify one signature in a batch.
+/// All fields are validated before batch processing begins.
+#[derive(Debug, Clone)]
+pub struct VerifyItem<'a> {
+    /// Domain separation context (e.g., context::TX)
+    pub context: Context,
+    /// Algorithm tag (must match signature algorithm)
+    pub alg: AlgTag,
+    /// Public key bytes (must match expected size for algorithm)
+    pub public: &'a [u8],
+    /// Message to verify (already domain-separated if precomputed)
+    pub msg: &'a [u8],
+    /// Signature bytes (must match expected size for algorithm)
+    pub sig: &'a [u8],
+}
+
+impl<'a> VerifyItem<'a> {
+    /// Create a new verify item with validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CryptoError::InvalidInput` if:
+    /// - Message exceeds MAX_MESSAGE_LEN
+    /// - Public key or signature size doesn't match algorithm
+    pub fn new(
+        context: Context,
+        alg: AlgTag,
+        public: &'a [u8],
+        msg: &'a [u8],
+        sig: &'a [u8],
+    ) -> Result<Self, CryptoError> {
+        // Validate message length
+        if msg.len() > MAX_MESSAGE_LEN {
+            return Err(CryptoError::InvalidInput);
+        }
+
+        // Validate public key and signature sizes
+        let expected_pub_size = match alg {
+            #[cfg(feature = "dev_stub_signing")]
+            AlgTag::Ed25519 => Ed25519Stub::PUBLIC_KEY_BYTES,
+            AlgTag::Dilithium2 => Dilithium2Scheme::PUBLIC_KEY_BYTES,
+            AlgTag::Dilithium3 | AlgTag::Dilithium5 | AlgTag::SphincsPlus => {
+                return Err(CryptoError::UnsupportedAlg(alg as u8));
+            }
+        };
+
+        let expected_sig_size = match alg {
+            #[cfg(feature = "dev_stub_signing")]
+            AlgTag::Ed25519 => Ed25519Stub::SIGNATURE_BYTES,
+            AlgTag::Dilithium2 => Dilithium2Scheme::SIGNATURE_BYTES,
+            AlgTag::Dilithium3 | AlgTag::Dilithium5 | AlgTag::SphincsPlus => {
+                return Err(CryptoError::UnsupportedAlg(alg as u8));
+            }
+        };
+
+        if public.len() != expected_pub_size {
+            return Err(CryptoError::InvalidInput);
+        }
+
+        if sig.len() != expected_sig_size {
+            return Err(CryptoError::InvalidInput);
+        }
+
+        Ok(Self {
+            context,
+            alg,
+            public,
+            msg,
+            sig,
+        })
+    }
+}
+
+/// Outcome of batch verification operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatchVerifyOutcome {
+    /// All signatures in the batch are valid
+    AllValid,
+    /// Some signatures are invalid (count of invalid signatures)
+    SomeInvalid(usize),
+}
+
+impl BatchVerifyOutcome {
+    /// Check if all signatures were valid
+    pub fn is_all_valid(&self) -> bool {
+        matches!(self, Self::AllValid)
+    }
+
+    /// Get count of invalid signatures (0 if all valid)
+    pub fn invalid_count(&self) -> usize {
+        match self {
+            Self::AllValid => 0,
+            Self::SomeInvalid(n) => *n,
+        }
+    }
+}
+
+/// Verify a single item (internal helper for batch verification).
+///
+/// This performs domain separation and calls the underlying verify implementation.
+/// Uses Zeroizing for temporary hash buffer.
+fn verify_one_item(item: &VerifyItem) -> bool {
+    // Compute domain-separated hash with zeroizing buffer
+    let hash = domain_separated_hash(item.context, item.alg, item.msg);
+
+    // Verify signature using algorithm-specific implementation
+    match item.alg {
+        #[cfg(feature = "dev_stub_signing")]
+        AlgTag::Ed25519 => Ed25519Stub::verify(item.public, &hash, item.sig),
+        AlgTag::Dilithium2 => Dilithium2Scheme::verify(item.public, &hash, item.sig),
+        AlgTag::Dilithium3 | AlgTag::Dilithium5 | AlgTag::SphincsPlus => false,
+    }
+}
+
+/// Batch signature verification with parallel processing.
+///
+/// Verifies multiple signatures in parallel using Rayon when batch size exceeds
+/// the configured threshold. Falls back to sequential verification for small batches.
+///
+/// # Arguments
+///
+/// * `items` - Iterator of `VerifyItem` to verify
+///
+/// # Returns
+///
+/// * `BatchVerifyOutcome::AllValid` - All signatures valid
+/// * `BatchVerifyOutcome::SomeInvalid(n)` - n signatures invalid
+///
+/// # Security
+///
+/// - All items are pre-validated (lengths, algorithm support)
+/// - Uses domain separation for all verifications
+/// - Deterministic result (order-independent)
+/// - Protected against DoS via MAX_BATCH_SIZE limit
+///
+/// # Performance
+///
+/// - Sequential: `n < threshold` (default 32)
+/// - Parallel: `n >= threshold` using Rayon thread pool
+/// - Thread count: Configured via CRYPTO_VERIFY_THREADS
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use crypto::{VerifyItem, batch_verify_v2, context};
+///
+/// let items = vec![
+///     VerifyItem::new(context::TX, AlgTag::Dilithium2, &pub1, &msg1, &sig1)?,
+///     VerifyItem::new(context::TX, AlgTag::Dilithium2, &pub2, &msg2, &sig2)?,
+/// ];
+///
+/// match batch_verify_v2(items) {
+///     BatchVerifyOutcome::AllValid => println!("All valid"),
+///     BatchVerifyOutcome::SomeInvalid(n) => println!("{} invalid", n),
+/// }
+/// ```
+pub fn batch_verify_v2<'a>(
+    items: impl IntoIterator<Item = VerifyItem<'a>>,
+) -> BatchVerifyOutcome {
+    let items_vec: Vec<_> = items.into_iter().collect();
+
+    // Empty batch is trivially valid
+    if items_vec.is_empty() {
+        return BatchVerifyOutcome::AllValid;
+    }
+
+    // Enforce maximum batch size (DoS protection)
+    let max_size = get_max_batch_size();
+    if items_vec.len() > max_size {
+        log::error!(
+            "Batch size {} exceeds maximum {}, rejecting entire batch",
+            items_vec.len(),
+            max_size
+        );
+        return BatchVerifyOutcome::SomeInvalid(items_vec.len());
+    }
+
+    let config = batch_config();
+    let use_parallel = items_vec.len() >= config.threshold && config.threads > 1;
+
+    log::trace!(
+        "Batch verify: {} items, parallel={}, threads={}, threshold={}",
+        items_vec.len(),
+        use_parallel,
+        config.threads,
+        config.threshold
+    );
+
+    // Count invalid signatures
+    let invalid_count: usize = if use_parallel {
+        // Parallel verification with Rayon
+        items_vec
+            .par_iter()
+            .map(|item| !verify_one_item(item) as usize)
+            .sum()
+    } else {
+        // Sequential verification
+        items_vec
+            .iter()
+            .map(|item| !verify_one_item(item) as usize)
+            .sum()
+    };
+
+    if invalid_count == 0 {
+        BatchVerifyOutcome::AllValid
+    } else {
+        BatchVerifyOutcome::SomeInvalid(invalid_count)
+    }
+}
+
 /// **Batch Signature Verification API** (Reserved for Future Optimization)
 ///
 /// This function is a placeholder for future batch verification optimization.
