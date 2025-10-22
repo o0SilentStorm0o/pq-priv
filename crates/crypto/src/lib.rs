@@ -364,8 +364,9 @@ pub fn domain_separated_hash(context: Context, alg: AlgTag, msg: &[u8]) -> [u8; 
     );
 
     // CBOR encode with deterministic (canonical) encoding
-    let mut cbor_bytes = Vec::new();
-    ciborium::into_writer(&tuple, &mut cbor_bytes)
+    // Use Zeroizing to ensure CBOR buffer (which contains raw message data) is wiped
+    let mut cbor_bytes = Zeroizing::new(Vec::new());
+    ciborium::into_writer(&tuple, cbor_bytes.as_mut() as &mut Vec<u8>)
         .expect("CBOR encoding should not fail for simple tuple");
 
     // Validate CBOR output length (final defensive check)
