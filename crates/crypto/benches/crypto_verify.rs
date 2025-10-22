@@ -9,8 +9,10 @@
 //!
 //! Uses Dilithium2 (ML-DSA-44) for realistic post-quantum performance.
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use crypto::{batch_verify_v2, context, sign, verify, AlgTag, PublicKey, SecretKey, Signature, VerifyItem};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use crypto::{
+    AlgTag, PublicKey, SecretKey, Signature, VerifyItem, batch_verify_v2, context, sign, verify,
+};
 use pqcrypto_traits::sign::PublicKey as _;
 use pqcrypto_traits::sign::SecretKey as _;
 use rand::{RngCore, SeedableRng};
@@ -22,7 +24,7 @@ fn generate_keypair(seed: u64) -> (PublicKey, SecretKey) {
     let mut rng = ChaCha20Rng::seed_from_u64(seed);
     let mut seed_bytes = [0u8; 32];
     rng.fill_bytes(&mut seed_bytes);
-    
+
     // Use Dilithium2 keygen (note: pqcrypto-mldsa ignores seed, uses OsRng)
     let (pk, sk) = pqcrypto_mldsa::mldsa44::keypair();
     (
@@ -41,10 +43,10 @@ fn create_signed_message(
     let mut rng = ChaCha20Rng::seed_from_u64(seed);
     let mut message = vec![0u8; msg_size];
     rng.fill_bytes(&mut message);
-    
-    let signature = sign(&message, sk, AlgTag::Dilithium2, context::TX)
-        .expect("signing should succeed");
-    
+
+    let signature =
+        sign(&message, sk, AlgTag::Dilithium2, context::TX).expect("signing should succeed");
+
     (message, signature)
 }
 
@@ -143,7 +145,10 @@ fn bench_throughput_comparison(c: &mut Criterion) {
     group.throughput(Throughput::Elements(batch_size as u64));
 
     // Generate test data
-    println!("Generating {} keypairs for throughput comparison...", batch_size);
+    println!(
+        "Generating {} keypairs for throughput comparison...",
+        batch_size
+    );
     let keypairs: Vec<_> = (0..batch_size)
         .map(|i| {
             if i % 10 == 0 {

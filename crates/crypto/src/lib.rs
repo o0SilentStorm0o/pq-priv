@@ -15,8 +15,8 @@
 //! - **Strict Validation**: All deserializations enforce exact length checks
 
 use std::convert::TryInto;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use blake3::derive_key;
 #[cfg(feature = "dev_stub_signing")]
@@ -74,7 +74,7 @@ static BATCH_CONFIG: OnceLock<BatchVerifyConfig> = OnceLock::new();
 fn batch_config() -> &'static BatchVerifyConfig {
     BATCH_CONFIG.get_or_init(|| {
         let num_cpus = num_cpus::get();
-        
+
         let threads = std::env::var("CRYPTO_VERIFY_THREADS")
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
@@ -990,9 +990,7 @@ fn verify_one_item(item: &VerifyItem) -> bool {
 ///     BatchVerifyOutcome::SomeInvalid(n) => println!("{} invalid", n),
 /// }
 /// ```
-pub fn batch_verify_v2<'a>(
-    items: impl IntoIterator<Item = VerifyItem<'a>>,
-) -> BatchVerifyOutcome {
+pub fn batch_verify_v2<'a>(items: impl IntoIterator<Item = VerifyItem<'a>>) -> BatchVerifyOutcome {
     let start = Instant::now();
 
     // Increment call counter
@@ -1628,9 +1626,20 @@ mod tests {
         let invalid_after = get_batch_verify_invalid_total();
         let duration_after = get_batch_verify_duration_us_total();
 
-        assert_eq!(calls_after, calls_before + 1, "calls counter should increment by 1");
-        assert_eq!(items_after, items_before + 3, "items counter should increment by 3");
-        assert_eq!(invalid_after, invalid_before, "invalid counter should not change (all valid)");
+        assert_eq!(
+            calls_after,
+            calls_before + 1,
+            "calls counter should increment by 1"
+        );
+        assert_eq!(
+            items_after,
+            items_before + 3,
+            "items counter should increment by 3"
+        );
+        assert_eq!(
+            invalid_after, invalid_before,
+            "invalid counter should not change (all valid)"
+        );
         assert!(duration_after > duration_before, "duration should increase");
 
         // Test invalid signature increments invalid counter
@@ -1655,6 +1664,10 @@ mod tests {
         assert_eq!(outcome_bad, BatchVerifyOutcome::SomeInvalid(1));
 
         let invalid_after2 = get_batch_verify_invalid_total();
-        assert_eq!(invalid_after2, invalid_before2 + 1, "invalid counter should increment by 1");
+        assert_eq!(
+            invalid_after2,
+            invalid_before2 + 1,
+            "invalid counter should increment by 1"
+        );
     }
 }

@@ -11,7 +11,7 @@ use crypto::{
     random_nonce,
 };
 use tx::{Input, Output, OutputMeta, Tx, TxBuilder, Witness, binding_hash};
-use utxo::{OutPoint, OutputRecord, UtxoError, UtxoBackend, apply_block};
+use utxo::{OutPoint, OutputRecord, UtxoBackend, UtxoError, apply_block};
 
 /// Simple in-memory UTXO backend for testing
 #[derive(Default)]
@@ -82,7 +82,14 @@ fn create_signed_input(
     let signature = crypto::sign(&message, secret, AlgTag::Dilithium2, context::TX)
         .expect("signing should succeed");
 
-    Input::new(prev_txid, prev_index, link, public.clone(), ring_proof, signature)
+    Input::new(
+        prev_txid,
+        prev_index,
+        link,
+        public.clone(),
+        ring_proof,
+        signature,
+    )
 }
 
 /// Create a simple output for testing
@@ -180,7 +187,10 @@ fn block_with_many_transactions_uses_batch_verify() {
 
     // Apply block (validates all transactions)
     let result = apply_block(&mut backend, &block, 1);
-    assert!(result.is_ok(), "Block with 50 valid transactions should apply successfully");
+    assert!(
+        result.is_ok(),
+        "Block with 50 valid transactions should apply successfully"
+    );
 
     // Verify batch verify was used
     let calls_after = crypto::get_batch_verify_calls_total();
@@ -195,7 +205,11 @@ fn block_with_many_transactions_uses_batch_verify() {
 
     // All transactions validated successfully
     // 51 outputs: 50 consumed + created by regular txs, plus 1 from coinbase
-    assert_eq!(backend.utxos.len(), 51, "UTXO set should have 51 outputs (50 from regular txs + 1 coinbase)");
+    assert_eq!(
+        backend.utxos.len(),
+        51,
+        "UTXO set should have 51 outputs (50 from regular txs + 1 coinbase)"
+    );
 }
 
 /// Test: Block with one invalid signature is rejected
@@ -215,8 +229,12 @@ fn block_with_one_invalid_signature_is_rejected() {
     let outpoint1 = OutPoint::new([10; 32], 0);
     let outpoint2 = OutPoint::new([20; 32], 0);
 
-    backend.insert(outpoint1, OutputRecord::new(create_output([1; 32]), 0, 0)).unwrap();
-    backend.insert(outpoint2, OutputRecord::new(create_output([2; 32]), 0, 1)).unwrap();
+    backend
+        .insert(outpoint1, OutputRecord::new(create_output([1; 32]), 0, 0))
+        .unwrap();
+    backend
+        .insert(outpoint2, OutputRecord::new(create_output([2; 32]), 0, 1))
+        .unwrap();
 
     // Create transaction with 2 inputs
     let output = create_output([99; 32]);
@@ -224,14 +242,20 @@ fn block_with_one_invalid_signature_is_rejected() {
     let binding = binding_hash(std::slice::from_ref(&output), &witness);
 
     // Input 1: Valid signature
-    let input1 = create_signed_input(outpoint1.txid, outpoint1.index, &public1, &secret1, &binding);
+    let input1 = create_signed_input(
+        outpoint1.txid,
+        outpoint1.index,
+        &public1,
+        &secret1,
+        &binding,
+    );
 
     // Input 2: INVALID signature (signed with wrong key)
     let input2_bad = create_signed_input(
         outpoint2.txid,
         outpoint2.index,
-        &public2,  // Correct public key
-        &secret1,  // WRONG secret key
+        &public2, // Correct public key
+        &secret1, // WRONG secret key
         &binding,
     );
 
@@ -265,7 +289,11 @@ fn block_with_one_invalid_signature_is_rejected() {
     );
 
     // UTXO set should be unchanged (block rejected)
-    assert_eq!(backend.utxos.len(), 2, "UTXO set should be unchanged after rejection");
+    assert_eq!(
+        backend.utxos.len(),
+        2,
+        "UTXO set should be unchanged after rejection"
+    );
 }
 
 /// Test: Multi-input transaction triggers batch verification
@@ -446,7 +474,13 @@ fn mixed_validity_batch_detected() {
         let input = if i == 5 {
             // Input 5: Sign with WRONG key
             let wrong_secret = &keypairs[(i + 1) % 10].1;
-            create_signed_input(outpoint.txid, outpoint.index, public, wrong_secret, &binding)
+            create_signed_input(
+                outpoint.txid,
+                outpoint.index,
+                public,
+                wrong_secret,
+                &binding,
+            )
         } else {
             // Other inputs: Valid signatures
             create_signed_input(outpoint.txid, outpoint.index, public, secret, &binding)

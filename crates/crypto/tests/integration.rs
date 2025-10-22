@@ -517,15 +517,14 @@ fn batch_verify_empty_is_valid() {
 #[test]
 fn batch_verify_single_valid_signature() {
     let seed = [1u8; 32];
-    let (pk_bytes, sk_bytes) = Dilithium2Scheme::keygen_from_seed(&seed)
-        .expect("keygen should succeed");
+    let (pk_bytes, sk_bytes) =
+        Dilithium2Scheme::keygen_from_seed(&seed).expect("keygen should succeed");
 
     let public = PublicKey::from_bytes(pk_bytes);
     let secret = SecretKey::from_bytes(sk_bytes);
 
     let msg = b"Test message";
-    let sig = sign(msg, &secret, AlgTag::Dilithium2, context::TX)
-        .expect("signing should succeed");
+    let sig = sign(msg, &secret, AlgTag::Dilithium2, context::TX).expect("signing should succeed");
 
     let item = VerifyItem::new(
         context::TX,
@@ -555,8 +554,8 @@ fn batch_verify_multiple_valid_signatures() {
 
     for i in 0..count {
         let seed = [i as u8; 32];
-        let (pk_bytes, sk_bytes) = Dilithium2Scheme::keygen_from_seed(&seed)
-            .expect("keygen should succeed");
+        let (pk_bytes, sk_bytes) =
+            Dilithium2Scheme::keygen_from_seed(&seed).expect("keygen should succeed");
 
         publics.push(PublicKey::from_bytes(pk_bytes));
         secrets.push(SecretKey::from_bytes(sk_bytes));
@@ -602,8 +601,8 @@ fn batch_verify_mixed_validity_one_invalid() {
 
     for i in 0..count {
         let seed = [i as u8; 32];
-        let (pk_bytes, sk_bytes) = Dilithium2Scheme::keygen_from_seed(&seed)
-            .expect("keygen should succeed");
+        let (pk_bytes, sk_bytes) =
+            Dilithium2Scheme::keygen_from_seed(&seed).expect("keygen should succeed");
 
         publics.push(PublicKey::from_bytes(pk_bytes));
         secrets.push(SecretKey::from_bytes(sk_bytes));
@@ -618,15 +617,20 @@ fn batch_verify_mixed_validity_one_invalid() {
 
     // Add one invalid signature (sign with one message, verify with different)
     let seed = [99u8; 32];
-    let (pk_bytes, sk_bytes) = Dilithium2Scheme::keygen_from_seed(&seed)
-        .expect("keygen should succeed");
+    let (pk_bytes, sk_bytes) =
+        Dilithium2Scheme::keygen_from_seed(&seed).expect("keygen should succeed");
 
     publics.push(PublicKey::from_bytes(pk_bytes));
     secrets.push(SecretKey::from_bytes(sk_bytes));
 
     let signed_msg = b"Original message".to_vec();
-    let sig = sign(&signed_msg, &secrets[count], AlgTag::Dilithium2, context::TX)
-        .expect("signing should succeed");
+    let sig = sign(
+        &signed_msg,
+        &secrets[count],
+        AlgTag::Dilithium2,
+        context::TX,
+    )
+    .expect("signing should succeed");
     sigs.push(sig);
 
     // Use different message for verification (invalid)
@@ -656,25 +660,18 @@ fn batch_verify_mixed_validity_one_invalid() {
 fn batch_verify_len_checks() {
     // Test that invalid lengths are rejected at VerifyItem creation
     let seed = [1u8; 32];
-    let (pk_bytes, sk_bytes) = Dilithium2Scheme::keygen_from_seed(&seed)
-        .expect("keygen should succeed");
+    let (pk_bytes, sk_bytes) =
+        Dilithium2Scheme::keygen_from_seed(&seed).expect("keygen should succeed");
 
     let public = PublicKey::from_bytes(pk_bytes);
     let secret = SecretKey::from_bytes(sk_bytes);
 
     let msg = b"Test";
-    let sig = sign(msg, &secret, AlgTag::Dilithium2, context::TX)
-        .expect("signing should succeed");
+    let sig = sign(msg, &secret, AlgTag::Dilithium2, context::TX).expect("signing should succeed");
 
     // Test wrong public key length
     let short_pub = &public.as_bytes()[..100];
-    let result = VerifyItem::new(
-        context::TX,
-        AlgTag::Dilithium2,
-        short_pub,
-        msg,
-        &sig.bytes,
-    );
+    let result = VerifyItem::new(context::TX, AlgTag::Dilithium2, short_pub, msg, &sig.bytes);
     assert!(result.is_err(), "Short public key should be rejected");
 
     // Test wrong signature length
@@ -714,8 +711,8 @@ fn batch_verify_threshold_switch() {
 
     for i in 0..small_count {
         let seed = [i as u8; 32];
-        let (pk_bytes, sk_bytes) = Dilithium2Scheme::keygen_from_seed(&seed)
-            .expect("keygen should succeed");
+        let (pk_bytes, sk_bytes) =
+            Dilithium2Scheme::keygen_from_seed(&seed).expect("keygen should succeed");
 
         small_publics.push(PublicKey::from_bytes(pk_bytes));
         small_secrets.push(SecretKey::from_bytes(sk_bytes));
@@ -723,8 +720,13 @@ fn batch_verify_threshold_switch() {
     }
 
     for i in 0..small_count {
-        let sig = sign(&small_messages[i], &small_secrets[i], AlgTag::Dilithium2, context::TX)
-            .expect("signing should succeed");
+        let sig = sign(
+            &small_messages[i],
+            &small_secrets[i],
+            AlgTag::Dilithium2,
+            context::TX,
+        )
+        .expect("signing should succeed");
         small_sigs.push(sig);
     }
 
@@ -753,8 +755,8 @@ fn batch_verify_threshold_switch() {
 
     for i in 0..large_count {
         let seed = [(i % 256) as u8; 32];
-        let (pk_bytes, sk_bytes) = Dilithium2Scheme::keygen_from_seed(&seed)
-            .expect("keygen should succeed");
+        let (pk_bytes, sk_bytes) =
+            Dilithium2Scheme::keygen_from_seed(&seed).expect("keygen should succeed");
 
         large_publics.push(PublicKey::from_bytes(pk_bytes));
         large_secrets.push(SecretKey::from_bytes(sk_bytes));
@@ -762,8 +764,13 @@ fn batch_verify_threshold_switch() {
     }
 
     for i in 0..large_count {
-        let sig = sign(&large_messages[i], &large_secrets[i], AlgTag::Dilithium2, context::TX)
-            .expect("signing should succeed");
+        let sig = sign(
+            &large_messages[i],
+            &large_secrets[i],
+            AlgTag::Dilithium2,
+            context::TX,
+        )
+        .expect("signing should succeed");
         large_sigs.push(sig);
     }
 
@@ -798,8 +805,8 @@ fn batch_verify_parallel_consistency() {
 
     for i in 0..count {
         let seed = [i as u8; 32];
-        let (pk_bytes, sk_bytes) = Dilithium2Scheme::keygen_from_seed(&seed)
-            .expect("keygen should succeed");
+        let (pk_bytes, sk_bytes) =
+            Dilithium2Scheme::keygen_from_seed(&seed).expect("keygen should succeed");
 
         publics.push(PublicKey::from_bytes(pk_bytes));
         secrets.push(SecretKey::from_bytes(sk_bytes));
@@ -852,7 +859,7 @@ fn batch_verify_parallel_consistency() {
 fn batch_verify_max_size_protection() {
     // Test that reasonable batches work (we can't test MAX_BATCH_SIZE as it's 100k)
     // and verify max_batch_size getter works
-    
+
     let count = 100;
     let mut publics = Vec::new();
     let mut secrets = Vec::new();
@@ -861,8 +868,8 @@ fn batch_verify_max_size_protection() {
 
     for i in 0..count {
         let seed = [(i % 256) as u8; 32];
-        let (pk_bytes, sk_bytes) = Dilithium2Scheme::keygen_from_seed(&seed)
-            .expect("keygen should succeed");
+        let (pk_bytes, sk_bytes) =
+            Dilithium2Scheme::keygen_from_seed(&seed).expect("keygen should succeed");
 
         publics.push(PublicKey::from_bytes(pk_bytes));
         secrets.push(SecretKey::from_bytes(sk_bytes));
@@ -890,7 +897,7 @@ fn batch_verify_max_size_protection() {
 
     let outcome = batch_verify_v2(items);
     assert_eq!(outcome, BatchVerifyOutcome::AllValid);
-    
+
     // Verify max_batch_size getter works
     let max_size = get_max_batch_size();
     assert!(max_size >= DEFAULT_MAX_BATCH_SIZE);

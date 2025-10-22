@@ -253,8 +253,14 @@ fn property_batch_verify_random_sizes() {
             .zip(messages.iter())
             .zip(signatures.iter())
             .map(|((pk, msg), sig)| {
-                VerifyItem::new(context::TX, AlgTag::Dilithium2, pk.as_bytes(), msg, &sig.bytes)
-                    .expect("VerifyItem creation should succeed")
+                VerifyItem::new(
+                    context::TX,
+                    AlgTag::Dilithium2,
+                    pk.as_bytes(),
+                    msg,
+                    &sig.bytes,
+                )
+                .expect("VerifyItem creation should succeed")
             })
             .collect();
 
@@ -271,7 +277,7 @@ fn property_batch_verify_random_sizes() {
 /// Fuzz test: batch verify with random invalid signatures
 #[test]
 fn fuzz_batch_verify_with_invalid_signatures() {
-    use crypto::{VerifyItem, batch_verify_v2, BatchVerifyOutcome};
+    use crypto::{BatchVerifyOutcome, VerifyItem, batch_verify_v2};
 
     const BATCH_SIZE: usize = 20;
     const INVALID_POSITIONS: &[usize] = &[0, 5, 10, 15, 19]; // Positions to corrupt
@@ -311,8 +317,14 @@ fn fuzz_batch_verify_with_invalid_signatures() {
         .zip(messages.iter())
         .zip(signatures.iter())
         .map(|((pk, msg), sig)| {
-            VerifyItem::new(context::TX, AlgTag::Dilithium2, pk.as_bytes(), msg, &sig.bytes)
-                .expect("VerifyItem creation should succeed")
+            VerifyItem::new(
+                context::TX,
+                AlgTag::Dilithium2,
+                pk.as_bytes(),
+                msg,
+                &sig.bytes,
+            )
+            .expect("VerifyItem creation should succeed")
         })
         .collect();
 
@@ -344,19 +356,19 @@ fn fuzz_batch_verify_input_lengths() {
     // Test edge cases for message and signature lengths
     let test_cases = [
         // (message_len, sig_len, should_fail)
-        (0, Dilithium2Scheme::SIGNATURE_BYTES, false),       // Empty message OK
-        (1, Dilithium2Scheme::SIGNATURE_BYTES, false),       // Minimal message OK
-        (32, Dilithium2Scheme::SIGNATURE_BYTES, false),      // Normal message OK
-        (1024, Dilithium2Scheme::SIGNATURE_BYTES, false),    // Large message OK
-        (32, 0, true),                                        // Empty signature FAIL
-        (32, 100, true),                                      // Wrong sig size FAIL
-        (32, Dilithium2Scheme::SIGNATURE_BYTES - 1, true),   // One byte short FAIL
-        (32, Dilithium2Scheme::SIGNATURE_BYTES + 1, true),   // One byte long FAIL
+        (0, Dilithium2Scheme::SIGNATURE_BYTES, false), // Empty message OK
+        (1, Dilithium2Scheme::SIGNATURE_BYTES, false), // Minimal message OK
+        (32, Dilithium2Scheme::SIGNATURE_BYTES, false), // Normal message OK
+        (1024, Dilithium2Scheme::SIGNATURE_BYTES, false), // Large message OK
+        (32, 0, true),                                 // Empty signature FAIL
+        (32, 100, true),                               // Wrong sig size FAIL
+        (32, Dilithium2Scheme::SIGNATURE_BYTES - 1, true), // One byte short FAIL
+        (32, Dilithium2Scheme::SIGNATURE_BYTES + 1, true), // One byte long FAIL
     ];
 
     for (i, (msg_len, sig_len, should_fail)) in test_cases.iter().enumerate() {
-        let (pk, sk) = Dilithium2Scheme::keygen_from_seed(&[i as u8; 32])
-            .expect("keygen should succeed");
+        let (pk, sk) =
+            Dilithium2Scheme::keygen_from_seed(&[i as u8; 32]).expect("keygen should succeed");
         let pk_obj = PublicKey::from_bytes(pk);
         let sk_obj = SecretKey::from_bytes(sk);
 
@@ -458,8 +470,14 @@ fn property_batch_verify_deterministic() {
             .zip(messages.iter())
             .zip(signatures.iter())
             .map(|((pk, msg), sig)| {
-                VerifyItem::new(context::TX, AlgTag::Dilithium2, pk.as_bytes(), msg, &sig.bytes)
-                    .expect("VerifyItem creation should succeed")
+                VerifyItem::new(
+                    context::TX,
+                    AlgTag::Dilithium2,
+                    pk.as_bytes(),
+                    msg,
+                    &sig.bytes,
+                )
+                .expect("VerifyItem creation should succeed")
             })
             .collect();
 
@@ -509,8 +527,14 @@ fn fuzz_batch_verify_max_size() {
         .zip(messages.iter())
         .zip(signatures.iter())
         .map(|((pk, msg), sig)| {
-            VerifyItem::new(context::TX, AlgTag::Dilithium2, pk.as_bytes(), msg, &sig.bytes)
-                .expect("VerifyItem creation should succeed")
+            VerifyItem::new(
+                context::TX,
+                AlgTag::Dilithium2,
+                pk.as_bytes(),
+                msg,
+                &sig.bytes,
+            )
+            .expect("VerifyItem creation should succeed")
         })
         .collect();
 
@@ -536,8 +560,14 @@ fn fuzz_batch_verify_max_size() {
         .zip(messages.iter())
         .zip(signatures.iter())
         .map(|((pk, msg), sig)| {
-            VerifyItem::new(context::TX, AlgTag::Dilithium2, pk.as_bytes(), msg, &sig.bytes)
-                .expect("VerifyItem creation should succeed")
+            VerifyItem::new(
+                context::TX,
+                AlgTag::Dilithium2,
+                pk.as_bytes(),
+                msg,
+                &sig.bytes,
+            )
+            .expect("VerifyItem creation should succeed")
         })
         .collect();
 
