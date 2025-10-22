@@ -1,0 +1,55 @@
+# CI guard to ensure dev_stub_signing is disabled in release builds
+#
+# This workflow prevents accidentally shipping development stubs
+# (Ed25519) in production releases, which would compromise the
+# post-quantum security guarantees.
+
+name: Crypto Release Guard
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  check-release-profile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Check that dev_stub_signing is disabled in release
+        run: |
+          echo "Building crypto crate in release mode..."
+          cd crates/crypto
+          cargo build --release --no-default-features 2>&1 | tee build.log
+          
+          # Check if Ed25519 stub is included in release binary
+          if cargo tree --release --no-default-features | grep -q "ed25519-dalek"; then
+            echo "ERROR: ed25519-dalek found in release dependencies!"
+            echo "The dev_stub_signing feature must be disabled in release builds."
+            exit 1
+          fi
+          
+          echo "✓ Release build does not include Ed25519 stub"
+      
+      - name: Verify Dilithium2 is available in release
+        run: |
+          cd crates/crypto
+          # Check that Dilithium is available
+          if ! cargo tree --release --no-default-features | grep -q "pqcrypto-dilithium"; then
+            echo "ERROR: pqcrypto-dilithium not found in release dependencies!"
+            exit 1
+          fi
+          
+          echo "✓ Release build includes Dilithium2"
+      
+      - name: Run release tests
+        run: |
+          cd crates/crypto
+          cargo test --release --no-default-features
+          
+          echo "✓ All release tests passed"

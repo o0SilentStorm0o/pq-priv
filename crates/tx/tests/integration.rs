@@ -3,7 +3,7 @@
 //! These tests verify that transactions can be properly signed and
 //! verified using post-quantum signatures.
 
-use crypto::{AlgTag, Dilithium2Scheme, PublicKey, SecretKey, SignatureScheme, compute_link_tag, random_nonce};
+use crypto::{AlgTag, Dilithium2Scheme, PublicKey, SecretKey, SignatureScheme, compute_link_tag, context, random_nonce};
 use tx::{Output, OutputMeta, Tx, TxBuilder, binding_hash, input_auth_message, Input};
 
 /// Helper to build a signed input with explicit algorithm choice
@@ -28,8 +28,8 @@ fn build_dilithium2_input(
     hasher.update(blake3::hash(&ring_proof).as_bytes());
     let message: [u8; 32] = hasher.finalize().into();
     
-    // Sign with Dilithium2 explicitly
-    let signature = crypto::sign(&message, secret, AlgTag::Dilithium2)
+    // Sign with Dilithium2 explicitly using TX context
+    let signature = crypto::sign(&message, secret, AlgTag::Dilithium2, context::TX)
         .expect("Dilithium2 signing should succeed");
     
     Input::new(
@@ -83,8 +83,8 @@ fn sign_transaction_input_with_dilithium2() {
     // Check algorithm tag
     assert_eq!(input.pq_signature.alg, AlgTag::Dilithium2);
     
-    // Verify signature
-    crypto::verify(&auth_msg, &input.spend_public, &input.pq_signature)
+    // Verify signature with TX context
+    crypto::verify(&auth_msg, &input.spend_public, &input.pq_signature, context::TX)
         .expect("transaction signature should verify");
 }
 
@@ -151,7 +151,7 @@ fn complete_transaction_workflow() {
     
     for input in &tx.inputs {
         let auth_msg = input_auth_message(input, &binding_check);
-        crypto::verify(&auth_msg, &input.spend_public, &input.pq_signature)
+        crypto::verify(&auth_msg, &input.spend_public, &input.pq_signature, context::TX)
             .expect("input signature should verify");
     }
     
@@ -189,24 +189,24 @@ fn transaction_with_mixed_algorithms() {
     
     // Create input signed with Ed25519 (manual signing to override default)
     let message = b"ed25519 test";
-    let ed_sig = sign(message, &ed_spend.secret, AlgTag::Ed25519)
+    let ed_sig = sign(message, &ed_spend.secret, AlgTag::Ed25519, context::TX)
         .expect("ed25519 sign");
     
     assert_eq!(ed_sig.alg, AlgTag::Ed25519);
-    crypto::verify(message, &ed_spend.public, &ed_sig)
+    crypto::verify(message, &ed_spend.public, &ed_sig, context::TX)
         .expect("ed25519 sig should verify");
     
     // Create input signed with Dilithium2
-    let dil_sig = sign(message, &dil_spend.secret, AlgTag::Dilithium2)
+    let dil_sig = sign(message, &dil_spend.secret, AlgTag::Dilithium2, context::TX)
         .expect("dilithium2 sign");
     
     assert_eq!(dil_sig.alg, AlgTag::Dilithium2);
-    crypto::verify(message, &dil_spend.public, &dil_sig)
+    crypto::verify(message, &dil_spend.public, &dil_sig, context::TX)
         .expect("dilithium2 sig should verify");
     
     // Cross-verification should fail
-    assert!(crypto::verify(message, &dil_spend.public, &ed_sig).is_err());
-    assert!(crypto::verify(message, &ed_spend.public, &dil_sig).is_err());
+    assert!(crypto::verify(message, &dil_spend.public, &ed_sig, context::TX).is_err());
+    assert!(crypto::verify(message, &ed_spend.public, &dil_sig, context::TX).is_err());
 }
 
 /// Test transaction serialization and deserialization
@@ -245,7 +245,7 @@ fn transaction_serialization() {
     let binding_check = binding_hash(&deserialized.outputs, &deserialized.witness);
     for input in &deserialized.inputs {
         let auth_msg = input_auth_message(input, &binding_check);
-        crypto::verify(&auth_msg, &input.spend_public, &input.pq_signature)
+        crypto::verify(&auth_msg, &input.spend_public, &input.pq_signature, context::TX)
             .expect("deserialized signature should verify");
     }
 }
@@ -301,7 +301,7 @@ fn stress_test_multiple_transactions() {
         let binding = binding_hash(&tx.outputs, &tx.witness);
         for input in &tx.inputs {
             let auth_msg = input_auth_message(input, &binding);
-            crypto::verify(&auth_msg, &input.spend_public, &input.pq_signature)
+            crypto::verify(&auth_msg, &input.spend_public, &input.pq_signature, context::TX)
                 .expect("signature should verify");
         }
     }

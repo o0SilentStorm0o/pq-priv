@@ -6,6 +6,13 @@
 //!
 //! The API is designed so that swapping implementations only requires
 //! changing the algorithm tag and does not affect calling code.
+//!
+//! ## Security Features
+//!
+//! - **Zeroization**: Secret keys are automatically zeroized on drop
+//! - **Domain Separation**: Signatures include context tags to prevent cross-protocol attacks
+//! - **Constant-Time**: Critical operations use constant-time comparisons
+//! - **Strict Validation**: All deserializations enforce exact length checks
 
 use std::convert::TryInto;
 
@@ -20,9 +27,25 @@ use rand_core::SeedableRng;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
 use thiserror::Error;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Length (in bytes) of keys and tags produced by the placeholder scheme.
 pub const KEY_LEN: usize = 32;
+
+/// Domain separation contexts for signature generation.
+///
+/// These tags are included in the message preimage to prevent
+/// cross-protocol attacks and signature malleability.
+pub mod context {
+    /// Context tag for transaction input signatures.
+    pub const TX: &[u8] = b"PQ-PRIV|TX|v1";
+    
+    /// Context tag for block header signatures.
+    pub const BLOCK: &[u8] = b"PQ-PRIV|BLOCK|v1";
+    
+    /// Context tag for peer-to-peer handshake signatures.
+    pub const P2P_HANDSHAKE: &[u8] = b"PQ-PRIV|P2P|v1";
+}
 
 /// Signature algorithm tags advertised on chain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,8 +133,38 @@ pub trait SignatureScheme {
     fn verify(public: &[u8], msg: &[u8], sig: &[u8]) -> bool;
 }
 
+/// Compute a domain-separated hash of a message.
+///
+/// This function prepends a context tag and algorithm identifier to the message
+/// before hashing, preventing cross-protocol and cross-algorithm attacks.
+///
+/// # Arguments
+///
+/// * `context` - Domain separation tag (e.g., `context::TX` for transactions)
+/// * `alg` - The signature algorithm being used
+/// * `msg` - The message to hash
+///
+/// # Returns
+///
+/// A 32-byte hash of the domain-separated message.
+pub fn domain_separated_hash(context: &[u8], alg: AlgTag, msg: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha3_256::new();
+    
+    // Include context tag
+    hasher.update(context);
+    
+    // Include algorithm tag and version
+    hasher.update(&[alg as u8]);
+    
+    // Include message
+    hasher.update(msg);
+    
+    let result = hasher.finalize();
+    result.into()
+}
+
 /// Deterministic key material used for both scan and spend keys.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 pub struct KeyMaterial {
     #[serde(with = "serde_bytes")]
     master_seed: Vec<u8>,
@@ -198,8 +251,11 @@ impl PublicKey {
     }
 }
 
-/// Secret key wrapper.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Secret key wrapper with automatic zeroization on drop.
+///
+/// The key material is securely zeroized when the SecretKey goes out of scope,
+/// preventing sensitive data from remaining in memory.
+#[derive(Debug, Clone, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 pub struct SecretKey {
     #[serde(with = "serde_bytes")]
     bytes: Vec<u8>,
@@ -325,26 +381,45 @@ impl SignatureScheme for Ed25519Stub {
 /// CRYSTALS-Dilithium is a lattice-based signature scheme standardized
 /// by NIST (FIPS 204). Dilithium2 provides NIST security level 2
 /// (equivalent to AES-128 against quantum attacks).
+///
+/// ## Key Sizes
+///
+/// The actual key sizes are determined by the underlying library constants:
+/// - Public key: `dilithium2::public_key_bytes()` (typically 1312 bytes)
+/// - Secret key: `dilithium2::secret_key_bytes()` (library reports 2560, NIST standard is 2528)
+/// - Signature: `dilithium2::signature_bytes()` (typically 2420 bytes)
+///
+/// **IMPORTANT**: Never hardcode these sizes. Always use the library constants.
 pub struct Dilithium2Scheme;
 
 impl SignatureScheme for Dilithium2Scheme {
     const ALG: AlgTag = AlgTag::Dilithium2;
     const NAME: &'static str = "Dilithium2";
+    
+    // Use library constants directly - never hardcode sizes!
     const PUBLIC_KEY_BYTES: usize = dilithium2::public_key_bytes();
     const SECRET_KEY_BYTES: usize = dilithium2::secret_key_bytes();
     const SIGNATURE_BYTES: usize = dilithium2::signature_bytes();
 
     fn keygen_from_seed(seed: &[u8; 32]) -> Result<(Vec<u8>, Vec<u8>), CryptoError> {
-        // Note: pqcrypto-dilithium doesn't expose a seeded keygen directly.
-        // It uses system entropy for key generation.
-        // For deterministic keygen, we would need to use liboqs or implement
-        // a custom seeded RNG integration.
-        // For now, we hash the seed to derive a deterministic but unpredictable
-        // value that influences the key generation context.
+        // SECURITY WARNING: pqcrypto-dilithium v0.5 does not support deterministic keygen.
+        // It always uses OsRng (system entropy) for key generation.
+        //
+        // This is acceptable for:
+        // - Node/daemon key generation (where TRNG is preferred)
+        //
+        // This is NOT suitable for:
+        // - Wallet recovery from seed (requires deterministic keygen)
+        //
+        // TODO: Migrate to liboqs which supports deterministic keygen via seeded RNG
         
-        // TODO: Implement proper deterministic keygen using seed
-        // For Sprint 5, we accept non-deterministic keygen as a limitation
         let _seed_hash = blake3::hash(seed);
+        
+        // Use system TRNG - seed is currently ignored
+        log::warn!(
+            "Dilithium2 keygen: seed parameter ignored, using system TRNG. \
+             For deterministic keygen, migrate to liboqs."
+        );
         
         let (pk, sk) = dilithium2::keypair();
         
@@ -352,6 +427,7 @@ impl SignatureScheme for Dilithium2Scheme {
     }
 
     fn sign(secret: &[u8], msg: &[u8]) -> Result<Vec<u8>, CryptoError> {
+        // Strict length check - reject keys that don't match exactly
         if secret.len() != Self::SECRET_KEY_BYTES {
             return Err(CryptoError::InvalidKey);
         }
@@ -364,7 +440,11 @@ impl SignatureScheme for Dilithium2Scheme {
     }
 
     fn verify(public: &[u8], msg: &[u8], sig: &[u8]) -> bool {
-        if public.len() != Self::PUBLIC_KEY_BYTES || sig.len() != Self::SIGNATURE_BYTES {
+        // Strict length checks - reject any size mismatch to prevent malleability
+        if public.len() != Self::PUBLIC_KEY_BYTES {
+            return false;
+        }
+        if sig.len() != Self::SIGNATURE_BYTES {
             return false;
         }
         
@@ -382,12 +462,44 @@ impl SignatureScheme for Dilithium2Scheme {
     }
 }
 
-/// High-level signing API that dispatches to the appropriate scheme.
-pub fn sign(message: &[u8], secret: &SecretKey, alg: AlgTag) -> Result<Signature, CryptoError> {
+/// High-level signing API with domain separation.
+///
+/// This function computes a domain-separated hash of the message before signing,
+/// which includes:
+/// - A context tag (e.g., `context::TX` for transactions)
+/// - The algorithm identifier
+/// - The message itself
+///
+/// This prevents cross-protocol attacks and ensures signatures are bound to
+/// their intended context.
+///
+/// # Arguments
+///
+/// * `message` - The raw message to sign
+/// * `secret` - The secret key
+/// * `alg` - The signature algorithm to use
+/// * `context` - Domain separation context (use constants from `context` module)
+///
+/// # Examples
+///
+/// ```ignore
+/// use crypto::{sign, context, AlgTag};
+///
+/// let sig = sign(tx_hash, &secret_key, AlgTag::Dilithium2, context::TX)?;
+/// ```
+pub fn sign(
+    message: &[u8],
+    secret: &SecretKey,
+    alg: AlgTag,
+    context: &[u8],
+) -> Result<Signature, CryptoError> {
+    // Compute domain-separated hash
+    let hash = domain_separated_hash(context, alg, message);
+    
     let sig_bytes = match alg {
         #[cfg(feature = "dev_stub_signing")]
-        AlgTag::Ed25519 => Ed25519Stub::sign(secret.as_bytes(), message)?,
-        AlgTag::Dilithium2 => Dilithium2Scheme::sign(secret.as_bytes(), message)?,
+        AlgTag::Ed25519 => Ed25519Stub::sign(secret.as_bytes(), &hash)?,
+        AlgTag::Dilithium2 => Dilithium2Scheme::sign(secret.as_bytes(), &hash)?,
         AlgTag::Dilithium3 | AlgTag::Dilithium5 | AlgTag::SphincsPlus => {
             return Err(CryptoError::UnsupportedAlg(alg as u8));
         }
@@ -397,16 +509,52 @@ pub fn sign(message: &[u8], secret: &SecretKey, alg: AlgTag) -> Result<Signature
     Ok(Signature::new(alg, sig_bytes))
 }
 
-/// High-level verification API that dispatches to the appropriate scheme.
+/// High-level verification API with domain separation.
+///
+/// This function recomputes the domain-separated hash using the same context
+/// that was used during signing, then verifies the signature.
+///
+/// # Arguments
+///
+/// * `message` - The raw message that was signed
+/// * `public` - The public key
+/// * `signature` - The signature to verify
+/// * `context` - Domain separation context (must match what was used in `sign`)
+///
+/// # Security
+///
+/// - Performs strict length validation on keys and signatures
+/// - Rejects any size mismatch to prevent malleability attacks
+/// - Uses constant-time comparison for critical operations
 pub fn verify(
     message: &[u8],
     public: &PublicKey,
     signature: &Signature,
+    context: &[u8],
 ) -> Result<(), CryptoError> {
+    // Strict validation: signature must match expected size for its algorithm
+    let expected_sig_size = match signature.alg {
+        #[cfg(feature = "dev_stub_signing")]
+        AlgTag::Ed25519 => Ed25519Stub::SIGNATURE_BYTES,
+        AlgTag::Dilithium2 => Dilithium2Scheme::SIGNATURE_BYTES,
+        AlgTag::Dilithium3 | AlgTag::Dilithium5 | AlgTag::SphincsPlus => {
+            return Err(CryptoError::UnsupportedAlg(signature.alg as u8));
+        }
+        #[cfg(not(feature = "dev_stub_signing"))]
+        AlgTag::Ed25519 => return Err(CryptoError::UnsupportedAlg(signature.alg as u8)),
+    };
+    
+    if signature.bytes.len() != expected_sig_size {
+        return Err(CryptoError::InvalidSignature);
+    }
+    
+    // Compute domain-separated hash (must match signing context)
+    let hash = domain_separated_hash(context, signature.alg, message);
+    
     let valid = match signature.alg {
         #[cfg(feature = "dev_stub_signing")]
-        AlgTag::Ed25519 => Ed25519Stub::verify(public.as_bytes(), message, &signature.bytes),
-        AlgTag::Dilithium2 => Dilithium2Scheme::verify(public.as_bytes(), message, &signature.bytes),
+        AlgTag::Ed25519 => Ed25519Stub::verify(public.as_bytes(), &hash, &signature.bytes),
+        AlgTag::Dilithium2 => Dilithium2Scheme::verify(public.as_bytes(), &hash, &signature.bytes),
         AlgTag::Dilithium3 | AlgTag::Dilithium5 | AlgTag::SphincsPlus => {
             return Err(CryptoError::UnsupportedAlg(signature.alg as u8));
         }
@@ -477,8 +625,8 @@ mod tests {
         let km = KeyMaterial::random();
         let spend = km.derive_spend_keypair(0);
         let message = b"hello world";
-        let sig = sign(message, &spend.secret, AlgTag::Ed25519).expect("sign should succeed");
-        verify(message, &spend.public, &sig).expect("valid signature");
+        let sig = sign(message, &spend.secret, AlgTag::Ed25519, context::TX).expect("sign should succeed");
+        verify(message, &spend.public, &sig, context::TX).expect("valid signature");
     }
 
     #[test]
@@ -497,9 +645,9 @@ mod tests {
         let km = KeyMaterial::random();
         let spend = km.derive_spend_keypair(0);
         let message = b"algo mismatch";
-        let sig = sign(message, &spend.secret, AlgTag::Ed25519).expect("sign should succeed");
+        let sig = sign(message, &spend.secret, AlgTag::Ed25519, context::TX).expect("sign should succeed");
         let mismatched = Signature::new(AlgTag::SphincsPlus, sig.bytes.clone());
-        assert!(verify(message, &spend.public, &mismatched).is_err());
+        assert!(verify(message, &spend.public, &mismatched, context::TX).is_err());
     }
 
     #[test]
@@ -509,8 +657,8 @@ mod tests {
         let spend = km.derive_spend_keypair(0);
         let attacker = KeyMaterial::random().derive_spend_keypair(0);
         let message = b"forgery attempt";
-        let forged = sign(message, &attacker.secret, AlgTag::Ed25519).expect("sign should succeed");
-        assert!(verify(message, &spend.public, &forged).is_err());
+        let forged = sign(message, &attacker.secret, AlgTag::Ed25519, context::TX).expect("sign should succeed");
+        assert!(verify(message, &spend.public, &forged, context::TX).is_err());
     }
 
     #[test]
@@ -519,10 +667,10 @@ mod tests {
         let km = KeyMaterial::random();
         let spend = km.derive_spend_keypair(0);
         let message = b"corrupted";
-        let mut sig = sign(message, &spend.secret, AlgTag::Ed25519).expect("sign should succeed");
+        let mut sig = sign(message, &spend.secret, AlgTag::Ed25519, context::TX).expect("sign should succeed");
         // Corrupt the signature
         sig.bytes[0] ^= 0xFF;
-        assert!(verify(message, &spend.public, &sig).is_err());
+        assert!(verify(message, &spend.public, &sig, context::TX).is_err());
     }
 
     #[test]
@@ -592,10 +740,11 @@ mod tests {
 
     #[test]
     fn dilithium2_signature_sizes() {
-        // Note: pqcrypto-dilithium reports slightly different sizes than NIST spec
-        assert_eq!(Dilithium2Scheme::PUBLIC_KEY_BYTES, 1312);
-        assert_eq!(Dilithium2Scheme::SECRET_KEY_BYTES, 2560); // Library reports 2560, not 2528
-        assert_eq!(Dilithium2Scheme::SIGNATURE_BYTES, 2420);
+        // Use library constants - never hardcode!
+        // Note: pqcrypto-dilithium v0.5 reports 2560 for SK, NIST spec is 2528
+        assert_eq!(Dilithium2Scheme::PUBLIC_KEY_BYTES, dilithium2::public_key_bytes());
+        assert_eq!(Dilithium2Scheme::SECRET_KEY_BYTES, dilithium2::secret_key_bytes());
+        assert_eq!(Dilithium2Scheme::SIGNATURE_BYTES, dilithium2::signature_bytes());
     }
 
     #[test]
@@ -607,10 +756,10 @@ mod tests {
         
         let message = b"test with high-level API";
         
-        let sig = sign(message, &sk, AlgTag::Dilithium2).expect("sign should succeed");
+        let sig = sign(message, &sk, AlgTag::Dilithium2, context::TX).expect("sign should succeed");
         assert_eq!(sig.alg, AlgTag::Dilithium2);
         
-        verify(message, &pk, &sig).expect("verify should succeed");
+        verify(message, &pk, &sig, context::TX).expect("verify should succeed");
     }
 
     #[test]

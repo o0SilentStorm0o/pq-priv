@@ -5,8 +5,9 @@
 
 use crypto::{
     AlgTag, CryptoError, Dilithium2Scheme, KeyMaterial, PublicKey, SecretKey, Signature,
-    SignatureScheme, sign, verify,
+    SignatureScheme, context, sign, verify,
 };
+use pqcrypto_dilithium::dilithium2;
 
 #[cfg(feature = "dev_stub_signing")]
 use crypto::Ed25519Stub;
@@ -27,24 +28,28 @@ fn dilithium2_end_to_end_workflow() {
         .expect("Second keygen should succeed");
     let wrong_public_key = PublicKey::from_bytes(pk2_bytes);
     
-    // Step 3: Sign message with Dilithium2
+    // Step 3: Sign message with Dilithium2 using TX context
     let message = b"Transfer 100 coins to Alice";
-    let sig = sign(message, &secret_key, AlgTag::Dilithium2)
+    let sig = sign(message, &secret_key, AlgTag::Dilithium2, context::TX)
         .expect("Dilithium2 signing should succeed");
     
     // Step 4: Verify signature
     assert_eq!(sig.alg, AlgTag::Dilithium2);
-    verify(message, &public_key, &sig)
+    verify(message, &public_key, &sig, context::TX)
         .expect("Signature should verify successfully");
     
     // Step 5: Verify rejection of wrong key
-    assert!(verify(message, &wrong_public_key, &sig).is_err(),
+    assert!(verify(message, &wrong_public_key, &sig, context::TX).is_err(),
         "Signature should not verify with wrong public key");
     
     // Step 6: Verify rejection of modified message
     let modified_message = b"Transfer 999 coins to Alice";
-    assert!(verify(modified_message, &public_key, &sig).is_err(),
+    assert!(verify(modified_message, &public_key, &sig, context::TX).is_err(),
         "Signature should not verify with modified message");
+    
+    // Step 7: Verify rejection of wrong context
+    assert!(verify(message, &public_key, &sig, context::BLOCK).is_err(),
+        "Signature should not verify with wrong context");
 }
 
 /// Test that Ed25519 and Dilithium2 can coexist
@@ -56,12 +61,12 @@ fn cross_algorithm_compatibility() {
     let message = b"Cross-algorithm test message";
     
     // Sign with Ed25519
-    let ed25519_sig = sign(message, &spend.secret, AlgTag::Ed25519)
+    let ed25519_sig = sign(message, &spend.secret, AlgTag::Ed25519, context::TX)
         .expect("Ed25519 signing should succeed");
     assert_eq!(ed25519_sig.alg, AlgTag::Ed25519);
     
     // Verify Ed25519 signature
-    verify(message, &spend.public, &ed25519_sig)
+    verify(message, &spend.public, &ed25519_sig, context::TX)
         .expect("Ed25519 signature should verify");
     
     // Generate Dilithium2 keys
@@ -71,31 +76,32 @@ fn cross_algorithm_compatibility() {
     let dilithium_secret = SecretKey::from_bytes(dilithium_sk);
     
     // Sign with Dilithium2
-    let dilithium_sig = sign(message, &dilithium_secret, AlgTag::Dilithium2)
+    let dilithium_sig = sign(message, &dilithium_secret, AlgTag::Dilithium2, context::TX)
         .expect("Dilithium2 signing should succeed");
     assert_eq!(dilithium_sig.alg, AlgTag::Dilithium2);
     
     // Verify Dilithium2 signature
-    verify(message, &dilithium_public, &dilithium_sig)
+    verify(message, &dilithium_public, &dilithium_sig, context::TX)
         .expect("Dilithium2 signature should verify");
     
     // Cross-verify should fail (Ed25519 sig with Dilithium2 key)
-    assert!(verify(message, &dilithium_public, &ed25519_sig).is_err(),
+    assert!(verify(message, &dilithium_public, &ed25519_sig, context::TX).is_err(),
         "Ed25519 signature should not verify with Dilithium2 key");
     
     // Cross-verify should fail (Dilithium2 sig with Ed25519 key)
-    assert!(verify(message, &spend.public, &dilithium_sig).is_err(),
+    assert!(verify(message, &spend.public, &dilithium_sig, context::TX).is_err(),
         "Dilithium2 signature should not verify with Ed25519 key");
 }
 
 /// Test signature scheme trait directly for Dilithium2
 #[test]
 fn dilithium2_trait_implementation() {
-    // Test constants
+    // Test constants - use library values!
     assert_eq!(Dilithium2Scheme::ALG, AlgTag::Dilithium2);
     assert_eq!(Dilithium2Scheme::NAME, "Dilithium2");
-    assert_eq!(Dilithium2Scheme::PUBLIC_KEY_BYTES, 1312);
-    assert_eq!(Dilithium2Scheme::SIGNATURE_BYTES, 2420);
+    assert_eq!(Dilithium2Scheme::PUBLIC_KEY_BYTES, dilithium2::public_key_bytes());
+    assert_eq!(Dilithium2Scheme::SECRET_KEY_BYTES, dilithium2::secret_key_bytes());
+    assert_eq!(Dilithium2Scheme::SIGNATURE_BYTES, dilithium2::signature_bytes());
     
     // Test keygen
     let seed = [0x42; 32];
@@ -249,19 +255,19 @@ fn unsupported_algorithms_rejected() {
     let message = b"Test message";
     
     // Dilithium3 not yet implemented
-    match sign(message, &spend.secret, AlgTag::Dilithium3) {
+    match sign(message, &spend.secret, AlgTag::Dilithium3, context::TX) {
         Err(CryptoError::UnsupportedAlg(0x02)) => {}, // Expected
         other => panic!("Expected UnsupportedAlg error, got {:?}", other),
     }
     
     // Dilithium5 not yet implemented
-    match sign(message, &spend.secret, AlgTag::Dilithium5) {
+    match sign(message, &spend.secret, AlgTag::Dilithium5, context::TX) {
         Err(CryptoError::UnsupportedAlg(0x03)) => {}, // Expected
         other => panic!("Expected UnsupportedAlg error, got {:?}", other),
     }
     
     // SPHINCS+ not yet implemented
-    match sign(message, &spend.secret, AlgTag::SphincsPlus) {
+    match sign(message, &spend.secret, AlgTag::SphincsPlus, context::TX) {
         Err(CryptoError::UnsupportedAlg(0x10)) => {}, // Expected
         other => panic!("Expected UnsupportedAlg error, got {:?}", other),
     }
@@ -273,12 +279,14 @@ fn signature_serialization() {
     let (pk, sk) = Dilithium2Scheme::keygen_from_seed(&[55; 32])
         .expect("keygen should succeed");
     
-    let message = b"Serialization test";
-    let sig = Dilithium2Scheme::sign(&sk, message)
-        .expect("sign should succeed");
+    let pk_obj = PublicKey::from_bytes(pk);
+    let sk_obj = SecretKey::from_bytes(sk);
     
-    // Create signature object
-    let signature = Signature::new(AlgTag::Dilithium2, sig.clone());
+    let message = b"Serialization test";
+    
+    // Sign with high-level API (includes domain separation)
+    let signature = sign(message, &sk_obj, AlgTag::Dilithium2, context::TX)
+        .expect("sign should succeed");
     
     // Serialize with serde_json
     let json = serde_json::to_string(&signature)
@@ -289,12 +297,105 @@ fn signature_serialization() {
         .expect("signature should deserialize");
     
     assert_eq!(deserialized.alg, AlgTag::Dilithium2);
-    assert_eq!(deserialized.bytes, sig);
+    assert_eq!(deserialized.bytes, signature.bytes);
     
     // Verify deserialized signature works
-    let pk_obj = PublicKey::from_bytes(pk);
-    verify(message, &pk_obj, &deserialized)
+    verify(message, &pk_obj, &deserialized, context::TX)
         .expect("deserialized signature should verify");
+}
+
+/// Test strict signature length validation (malleability protection)
+#[test]
+fn signature_length_validation() {
+    let (pk, sk) = Dilithium2Scheme::keygen_from_seed(&[42; 32])
+        .expect("keygen should succeed");
+    let pk_obj = PublicKey::from_bytes(pk);
+    let sk_obj = SecretKey::from_bytes(sk);
+    
+    let message = b"Test message";
+    let sig = sign(message, &sk_obj, AlgTag::Dilithium2, context::TX)
+        .expect("signing should succeed");
+    
+    // Valid signature should verify
+    verify(message, &pk_obj, &sig, context::TX)
+        .expect("valid signature should verify");
+    
+    // Truncated signature should be rejected
+    let mut truncated = sig.clone();
+    truncated.bytes.truncate(truncated.bytes.len() - 10);
+    assert!(verify(message, &pk_obj, &truncated, context::TX).is_err(),
+        "truncated signature should be rejected");
+    
+    // Extended signature should be rejected
+    let mut extended = sig.clone();
+    extended.bytes.extend_from_slice(&[0u8; 10]);
+    assert!(verify(message, &pk_obj, &extended, context::TX).is_err(),
+        "extended signature should be rejected");
+    
+    // Empty signature should be rejected
+    let empty = Signature::new(AlgTag::Dilithium2, vec![]);
+    assert!(verify(message, &pk_obj, &empty, context::TX).is_err(),
+        "empty signature should be rejected");
+}
+
+/// Test domain separation prevents cross-context attacks
+#[test]
+fn domain_separation_protection() {
+    let (pk, sk) = Dilithium2Scheme::keygen_from_seed(&[42; 32])
+        .expect("keygen should succeed");
+    let pk_obj = PublicKey::from_bytes(pk);
+    let sk_obj = SecretKey::from_bytes(sk);
+    
+    let message = b"Important transaction";
+    
+    // Sign with TX context
+    let tx_sig = sign(message, &sk_obj, AlgTag::Dilithium2, context::TX)
+        .expect("TX signing should succeed");
+    
+    // Sign with BLOCK context
+    let block_sig = sign(message, &sk_obj, AlgTag::Dilithium2, context::BLOCK)
+        .expect("BLOCK signing should succeed");
+    
+    // TX signature should verify with TX context
+    verify(message, &pk_obj, &tx_sig, context::TX)
+        .expect("TX signature should verify with TX context");
+    
+    // TX signature should NOT verify with BLOCK context
+    assert!(verify(message, &pk_obj, &tx_sig, context::BLOCK).is_err(),
+        "TX signature should not verify with BLOCK context");
+    
+    // BLOCK signature should verify with BLOCK context
+    verify(message, &pk_obj, &block_sig, context::BLOCK)
+        .expect("BLOCK signature should verify with BLOCK context");
+    
+    // BLOCK signature should NOT verify with TX context
+    assert!(verify(message, &pk_obj, &block_sig, context::TX).is_err(),
+        "BLOCK signature should not verify with TX context");
+}
+
+/// Test corrupted signature bytes are rejected
+#[test]
+fn corrupted_signature_rejection() {
+    let (pk, sk) = Dilithium2Scheme::keygen_from_seed(&[42; 32])
+        .expect("keygen should succeed");
+    let pk_obj = PublicKey::from_bytes(pk);
+    let sk_obj = SecretKey::from_bytes(sk);
+    
+    let message = b"Test message";
+    let sig = sign(message, &sk_obj, AlgTag::Dilithium2, context::TX)
+        .expect("signing should succeed");
+    
+    // Original should verify
+    verify(message, &pk_obj, &sig, context::TX)
+        .expect("original signature should verify");
+    
+    // Test corruption at different positions
+    for pos in [0, sig.bytes.len() / 2, sig.bytes.len() - 1] {
+        let mut corrupted = sig.clone();
+        corrupted.bytes[pos] ^= 0x01; // Flip one bit
+        assert!(verify(message, &pk_obj, &corrupted, context::TX).is_err(),
+            "corrupted signature at position {} should be rejected", pos);
+    }
 }
 
 /// Benchmark-style test: sign and verify 100 messages
