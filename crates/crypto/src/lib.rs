@@ -1171,8 +1171,8 @@ mod tests {
 
         let after_sk = get_zeroize_ops_total();
         assert!(
-            after_sk >= initial_count + 1,
-            "Counter should increment by at least 1 after dropping SecretKey (was {}, now {})",
+            after_sk > initial_count,
+            "Counter should increment after dropping SecretKey (was {}, now {})",
             initial_count,
             after_sk
         );

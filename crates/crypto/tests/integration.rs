@@ -9,9 +9,6 @@ use crypto::{
 };
 use pqcrypto_dilithium::dilithium2;
 
-#[cfg(feature = "dev_stub_signing")]
-use crypto::Ed25519Stub;
-
 /// Test complete workflow: keygen → sign → verify for Dilithium2
 #[test]
 fn dilithium2_end_to_end_workflow() {

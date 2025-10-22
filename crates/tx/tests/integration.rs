@@ -60,7 +60,7 @@ fn sign_transaction_input_with_dilithium2() {
 
     // Calculate binding hash
     let witness = tx::Witness::default();
-    let binding = binding_hash(&[output.clone()], &witness);
+    let binding = binding_hash(std::slice::from_ref(&output), &witness);
 
     // Build signed input with Dilithium2
     let prev_txid = [7u8; 32];
@@ -188,7 +188,7 @@ fn transaction_with_mixed_algorithms() {
     // Create output
     let output = Output::new(vec![1, 2, 3], [0u8; 32], OutputMeta::default());
     let witness = tx::Witness::default();
-    let _binding = binding_hash(&[output.clone()], &witness);
+    let _binding = binding_hash(std::slice::from_ref(&output), &witness);
 
     // Create input signed with Ed25519 (manual signing to override default)
     let message = b"ed25519 test";
@@ -223,7 +223,7 @@ fn transaction_serialization() {
     // Build transaction
     let output = Output::new(vec![0xAB, 0xCD], [3u8; 32], OutputMeta::default());
     let witness = tx::Witness::default();
-    let binding = binding_hash(&[output.clone()], &witness);
+    let binding = binding_hash(std::slice::from_ref(&output), &witness);
 
     let input = build_dilithium2_input([9u8; 32], 0, &public, &secret, vec![0x11], &binding);
 
@@ -278,11 +278,11 @@ fn stress_test_multiple_transactions() {
         );
 
         let witness = tx::Witness::default();
-        let binding = binding_hash(&[output.clone()], &witness);
+        let binding = binding_hash(std::slice::from_ref(&output), &witness);
 
         let input = build_dilithium2_input(
             [i as u8; 32],
-            i as u32,
+            i,
             &public,
             &secret,
             vec![0x77],

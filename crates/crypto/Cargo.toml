@@ -6,8 +6,8 @@ license.workspace = true
 build = "build.rs"
 
 [features]
-# SECURITY: The 'default' feature set excludes dev_stub_signing.
-# The dev_stub_signing feature is ONLY for development/testing (uses non-PQC Ed25519).
+# SECURITY: The 'default' feature set is empty (quantum-safe only).
+# The stub signing feature is ONLY for development/testing (uses non-PQC Ed25519).
 default = []
 # Enable Ed25519 as a development stub for testing (NOT for production)
 # This feature will cause a compile error if enabled in release builds

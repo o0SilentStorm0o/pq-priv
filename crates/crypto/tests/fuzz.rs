@@ -17,7 +17,7 @@ fn fuzz_verify_random_signatures() {
     let message = b"Test message";
 
     // Test various malformed signature lengths
-    let test_cases = vec![
+    let test_cases = [
         vec![],                                            // Empty
         vec![0u8; 1],                                      // Too short
         vec![0xFF; 100],                                   // Random short
@@ -55,7 +55,7 @@ fn fuzz_verify_random_messages() {
         .expect("signing should succeed");
 
     // Test various random message lengths
-    let test_messages = vec![
+    let test_messages = [
         vec![],            // Empty
         vec![0u8; 1],      // One byte
         vec![0xFF; 32],    // Hash size
@@ -94,11 +94,11 @@ fn fuzz_sign_message_sizes() {
 
         // Sign should succeed for any message size
         let sig = sign(&message, &sk_obj, AlgTag::Dilithium2, context::TX)
-            .expect(&format!("signing {} byte message should succeed", size));
+            .unwrap_or_else(|_| panic!("signing {} byte message should succeed", size));
 
         // Verify should succeed
         verify(&message, &pk_obj, &sig, context::TX)
-            .expect(&format!("verifying {} byte signature should succeed", size));
+            .unwrap_or_else(|_| panic!("verifying {} byte signature should succeed", size));
 
         // Modified message should fail
         if size > 0 {
