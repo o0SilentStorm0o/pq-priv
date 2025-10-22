@@ -280,14 +280,8 @@ fn stress_test_multiple_transactions() {
         let witness = tx::Witness::default();
         let binding = binding_hash(std::slice::from_ref(&output), &witness);
 
-        let input = build_dilithium2_input(
-            [i as u8; 32],
-            i,
-            &public,
-            &secret,
-            vec![0x77],
-            &binding,
-        );
+        let input =
+            build_dilithium2_input([i as u8; 32], i, &public, &secret, vec![0x77], &binding);
 
         let tx = TxBuilder::new()
             .add_input(input)

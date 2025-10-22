@@ -39,7 +39,7 @@ jobs:
           cargo build --release --no-default-features 2>&1 | tee build.log
           
           # Check if Ed25519 stub is included in release binary
-          if cargo tree --release --no-default-features | grep -q "ed25519-dalek"; then
+          if cargo tree --no-default-features | grep -q "ed25519-dalek"; then
             echo "ERROR: ed25519-dalek found in release dependencies!"
             echo "The dev_stub_signing feature must be disabled in release builds."
             exit 1
@@ -59,7 +59,7 @@ jobs:
         run: |
           cd crates/crypto
           # Check that Dilithium is available
-          if ! cargo tree --release --no-default-features | grep -q "pqcrypto-dilithium"; then
+          if ! cargo tree --no-default-features | grep -q "pqcrypto-dilithium"; then
             echo "ERROR: pqcrypto-dilithium not found in release dependencies!"
             exit 1
           fi
