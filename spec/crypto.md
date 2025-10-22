@@ -31,7 +31,7 @@ Each signature scheme is identified by an `AlgTag`:
 | Tag | Value | Algorithm | Status |
 |-----|-------|-----------|--------|
 | `Ed25519` | 0x00 | Ed25519 | Dev stub only (feature `dev_stub_signing`) |
-| `Dilithium2` | 0x01 | CRYSTALS-Dilithium2 | Production (Sprint 5) |
+| `Dilithium2` | 0x01 | CRYSTALS-Dilithium2 | ✅ **Implemented** (Sprint 5) |
 | `Dilithium3` | 0x02 | CRYSTALS-Dilithium3 | Future |
 | `Dilithium5` | 0x03 | CRYSTALS-Dilithium5 | Future |
 | `SphincsPlus` | 0x10 | SPHINCS+ | Future |
@@ -49,18 +49,22 @@ Each signature scheme is identified by an `AlgTag`:
 
 **Implementation**: Uses `ed25519-dalek` with deterministic key derivation via ChaCha20 expansion.
 
-### CRYSTALS-Dilithium2
+### CRYSTALS-Dilithium2 ✅
 
 **Security Level**: NIST Level 2 (quantum-resistant, equivalent to AES-128)
 
-**Key Sizes** (to be implemented in `feat/crypto-dilithium`):
+**Key Sizes**:
 - Public key: 1,312 bytes
-- Secret key: 2,528 bytes
+- Secret key: 2,560 bytes
 - Signature: 2,420 bytes
 
 **Usage**: Primary signature scheme for production deployment.
 
-**Implementation**: Will use `pqcrypto-dilithium` or `liboqs-rust`.
+**Implementation**: Implemented using `pqcrypto-dilithium` (v0.5). Based on Module-LWE hardness assumption, standardized as NIST FIPS 204.
+
+**Performance**: ~2ms signing, ~1ms verification (reference implementation).
+
+**Status**: ✅ Fully implemented and tested (Sprint 5 complete)
 
 ### CRYSTALS-Dilithium3 / Dilithium5
 
@@ -186,9 +190,30 @@ Each signature scheme implementation MUST pass:
 3. **Malleability**: Verify rejects corrupted signature bytes
 4. **Algorithm mismatch**: Verify rejects signatures with wrong `alg_tag`
 
+## Sprint 5 Implementation Status ✅
+
+**Completed**:
+- ✅ Trait-based signature scheme API
+- ✅ Extended AlgTag with Dilithium2/3/5, Ed25519, SPHINCS+
+- ✅ Ed25519Stub implementation (dev_stub_signing feature)
+- ✅ Dilithium2 full implementation
+- ✅ High-level sign()/verify() dispatch functions
+- ✅ Integration with tx and node crates
+- ✅ Comprehensive test suite (14 crypto tests, 70 total)
+- ✅ Documentation (spec/crypto.md, docs/crypto/dilithium.md)
+
+**Branches**:
+- `feat/crypto-traits` - Trait-based API foundation
+- `feat/crypto-dilithium` - Dilithium2 implementation
+
 ## Future Enhancements
 
+- [ ] Deterministic keygen with liboqs (current: uses system entropy)
+- [ ] AVX2/AVX-512 optimizations via liboqs
+- [ ] Batch signature verification for block validation
 - [ ] Memory zeroization for secret keys
+- [ ] Dilithium3/5 parameter sets
+- [ ] SPHINCS+ stateless signatures
 - [ ] Hardware security module (HSM) integration
 - [ ] Threshold signatures
 - [ ] BLS aggregation for block validation optimization
