@@ -55,16 +55,16 @@ jobs:
             echo "WARNING: No warning about dev features in release mode (consider adding one)"
           fi
       
-      - name: Verify Dilithium2 is available in release
+      - name: Verify ML-DSA is available in release
         run: |
           cd crates/crypto
-          # Check that Dilithium is available
-          if ! cargo tree --no-default-features | grep -q "pqcrypto-dilithium"; then
-            echo "ERROR: pqcrypto-dilithium not found in release dependencies!"
+          # Check that ML-DSA (pqcrypto-mldsa) is available
+          if ! cargo tree --no-default-features | grep -q "pqcrypto-mldsa"; then
+            echo "ERROR: pqcrypto-mldsa not found in release dependencies!"
             exit 1
           fi
           
-          echo "✓ Release build includes Dilithium2"
+          echo "✓ Release build includes ML-DSA-44"
       
       - name: Run release tests
         run: |

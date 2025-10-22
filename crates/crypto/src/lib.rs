@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use blake3::derive_key;
 #[cfg(feature = "dev_stub_signing")]
 use ed25519_dalek::{Signature as DalekSignature, Signer, SigningKey, Verifier, VerifyingKey};
-use pqcrypto_dilithium::dilithium2;
+use pqcrypto_mldsa::mldsa44;
 use pqcrypto_traits::sign::{
     DetachedSignature, PublicKey as PQPublicKey, SecretKey as PQSecretKey,
 };
@@ -98,11 +98,11 @@ pub enum AlgTag {
     /// Only available with `dev_stub_signing` feature.
     #[cfg(feature = "dev_stub_signing")]
     Ed25519 = 0x00,
-    /// CRYSTALS-Dilithium2 post-quantum signature scheme.
+    /// ML-DSA-44 (NIST FIPS 204, formerly CRYSTALS-Dilithium2) post-quantum signature scheme.
     Dilithium2 = 0x01,
-    /// CRYSTALS-Dilithium3 post-quantum signature scheme.
+    /// ML-DSA-65 (NIST FIPS 204, formerly CRYSTALS-Dilithium3) post-quantum signature scheme.
     Dilithium3 = 0x02,
-    /// CRYSTALS-Dilithium5 post-quantum signature scheme.
+    /// ML-DSA-87 (NIST FIPS 204, formerly CRYSTALS-Dilithium5) post-quantum signature scheme.
     Dilithium5 = 0x03,
     /// SPHINCS+ post-quantum signature scheme.
     SphincsPlus = 0x10,
@@ -520,18 +520,18 @@ impl SignatureScheme for Ed25519Stub {
     }
 }
 
-/// Dilithium2 post-quantum signature scheme implementation.
+/// ML-DSA-44 (Dilithium2) post-quantum signature scheme implementation.
 ///
-/// CRYSTALS-Dilithium is a lattice-based signature scheme standardized
-/// by NIST (FIPS 204). Dilithium2 provides NIST security level 2
+/// ML-DSA (Module-Lattice-Based Digital Signature Algorithm) is the NIST-standardized
+/// name for CRYSTALS-Dilithium (FIPS 204). ML-DSA-44 provides NIST security level 2
 /// (equivalent to AES-128 against quantum attacks).
 ///
 /// ## Key Sizes
 ///
 /// The actual key sizes are determined by the underlying library constants:
-/// - Public key: `dilithium2::public_key_bytes()` (typically 1312 bytes)
-/// - Secret key: `dilithium2::secret_key_bytes()` (library reports 2560, NIST standard is 2528)
-/// - Signature: `dilithium2::signature_bytes()` (typically 2420 bytes)
+/// - Public key: `mldsa44::public_key_bytes()` (typically 1312 bytes)
+/// - Secret key: `mldsa44::secret_key_bytes()` (library reports 2560, NIST standard is 2528)
+/// - Signature: `mldsa44::signature_bytes()` (typically 2420 bytes)
 ///
 /// **IMPORTANT**: Never hardcode these sizes. Always use the library constants.
 pub struct Dilithium2Scheme;
@@ -541,9 +541,9 @@ impl SignatureScheme for Dilithium2Scheme {
     const NAME: &'static str = "Dilithium2";
 
     // Use library constants directly - never hardcode sizes!
-    const PUBLIC_KEY_BYTES: usize = dilithium2::public_key_bytes();
-    const SECRET_KEY_BYTES: usize = dilithium2::secret_key_bytes();
-    const SIGNATURE_BYTES: usize = dilithium2::signature_bytes();
+    const PUBLIC_KEY_BYTES: usize = mldsa44::public_key_bytes();
+    const SECRET_KEY_BYTES: usize = mldsa44::secret_key_bytes();
+    const SIGNATURE_BYTES: usize = mldsa44::signature_bytes();
 
     fn keygen_from_seed(seed: &[u8; 32]) -> Result<(Vec<u8>, Vec<u8>), CryptoError> {
         // SECURITY WARNING: pqcrypto-dilithium v0.5 does not support deterministic keygen.
@@ -561,11 +561,11 @@ impl SignatureScheme for Dilithium2Scheme {
 
         // Use system TRNG - seed is currently ignored
         log::warn!(
-            "Dilithium2 keygen: seed parameter ignored, using system TRNG. \
+            "ML-DSA-44 keygen: seed parameter ignored, using system TRNG. \
              For deterministic keygen, migrate to liboqs."
         );
 
-        let (pk, sk) = dilithium2::keypair();
+        let (pk, sk) = mldsa44::keypair();
 
         Ok((pk.as_bytes().to_vec(), sk.as_bytes().to_vec()))
     }
@@ -576,9 +576,9 @@ impl SignatureScheme for Dilithium2Scheme {
             return Err(CryptoError::InvalidKey);
         }
 
-        let sk = dilithium2::SecretKey::from_bytes(secret).map_err(|_| CryptoError::InvalidKey)?;
+        let sk = mldsa44::SecretKey::from_bytes(secret).map_err(|_| CryptoError::InvalidKey)?;
 
-        let sig = dilithium2::detached_sign(msg, &sk);
+        let sig = mldsa44::detached_sign(msg, &sk);
         Ok(sig.as_bytes().to_vec())
     }
 
@@ -591,17 +591,17 @@ impl SignatureScheme for Dilithium2Scheme {
             return false;
         }
 
-        let pk = match dilithium2::PublicKey::from_bytes(public) {
+        let pk = match mldsa44::PublicKey::from_bytes(public) {
             Ok(pk) => pk,
             Err(_) => return false,
         };
 
-        let signature = match dilithium2::DetachedSignature::from_bytes(sig) {
+        let signature = match mldsa44::DetachedSignature::from_bytes(sig) {
             Ok(sig) => sig,
             Err(_) => return false,
         };
 
-        dilithium2::verify_detached_signature(&signature, msg, &pk).is_ok()
+        mldsa44::verify_detached_signature(&signature, msg, &pk).is_ok()
     }
 }
 
@@ -958,15 +958,15 @@ mod tests {
         // Note: pqcrypto-dilithium v0.5 reports 2560 for SK, NIST spec is 2528
         assert_eq!(
             Dilithium2Scheme::PUBLIC_KEY_BYTES,
-            dilithium2::public_key_bytes()
+            mldsa44::public_key_bytes()
         );
         assert_eq!(
             Dilithium2Scheme::SECRET_KEY_BYTES,
-            dilithium2::secret_key_bytes()
+            mldsa44::secret_key_bytes()
         );
         assert_eq!(
             Dilithium2Scheme::SIGNATURE_BYTES,
-            dilithium2::signature_bytes()
+            mldsa44::signature_bytes()
         );
     }
 

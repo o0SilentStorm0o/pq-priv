@@ -3,11 +3,11 @@
 //! These tests verify end-to-end workflows including key generation,
 //! signing, verification, and cross-algorithm compatibility.
 
-use crypto::{
-    AlgTag, CryptoError, Dilithium2Scheme, KeyMaterial, PublicKey, SecretKey, Signature,
-    SignatureScheme, context, sign, verify,
+use crypto::*;
+use pqcrypto_mldsa::mldsa44;
+use pqcrypto_traits::sign::{
+    PublicKey as PQPublicKey, SecretKey as PQSecretKey
 };
-use pqcrypto_dilithium::dilithium2;
 
 /// Test complete workflow: keygen → sign → verify for Dilithium2
 #[test]
@@ -17,13 +17,13 @@ fn dilithium2_end_to_end_workflow() {
     let (pk_bytes, sk_bytes) =
         Dilithium2Scheme::keygen_from_seed(&seed).expect("Dilithium2 keygen should succeed");
 
-    let public_key = PublicKey::from_bytes(pk_bytes.clone());
-    let secret_key = SecretKey::from_bytes(sk_bytes);
+    let public_key = PQPublicKey::from_bytes(&pk_bytes.clone().unwrap());
+    let secret_key = PQSecretKey::from_bytes(&sk_bytes).unwrap();
 
     // Step 2: Generate a second keypair for negative tests
     let (pk2_bytes, _) =
         Dilithium2Scheme::keygen_from_seed(&[99u8; 32]).expect("Second keygen should succeed");
-    let wrong_public_key = PublicKey::from_bytes(pk2_bytes);
+    let wrong_public_key = PQPublicKey::from_bytes(&pk2_bytes).unwrap();
 
     // Step 3: Sign message with Dilithium2 using TX context
     let message = b"Transfer 100 coins to Alice";
@@ -74,8 +74,8 @@ fn cross_algorithm_compatibility() {
     // Generate Dilithium2 keys
     let (dilithium_pk, dilithium_sk) =
         Dilithium2Scheme::keygen_from_seed(&[42; 32]).expect("Dilithium2 keygen should succeed");
-    let dilithium_public = PublicKey::from_bytes(dilithium_pk);
-    let dilithium_secret = SecretKey::from_bytes(dilithium_sk);
+    let dilithium_public = PQPublicKey::from_bytes(&dilithium_pk).unwrap();
+    let dilithium_secret = PQSecretKey::from_bytes(&dilithium_sk).unwrap();
 
     // Sign with Dilithium2
     let dilithium_sig = sign(message, &dilithium_secret, AlgTag::Dilithium2, context::TX)
@@ -107,15 +107,15 @@ fn dilithium2_trait_implementation() {
     assert_eq!(Dilithium2Scheme::NAME, "Dilithium2");
     assert_eq!(
         Dilithium2Scheme::PUBLIC_KEY_BYTES,
-        dilithium2::public_key_bytes()
+        mldsa44::public_key_bytes()
     );
     assert_eq!(
         Dilithium2Scheme::SECRET_KEY_BYTES,
-        dilithium2::secret_key_bytes()
+        mldsa44::secret_key_bytes()
     );
     assert_eq!(
         Dilithium2Scheme::SIGNATURE_BYTES,
-        dilithium2::signature_bytes()
+        mldsa44::signature_bytes()
     );
 
     // Test keygen
@@ -329,8 +329,8 @@ fn unsupported_algorithms_rejected() {
 fn signature_serialization() {
     let (pk, sk) = Dilithium2Scheme::keygen_from_seed(&[55; 32]).expect("keygen should succeed");
 
-    let pk_obj = PublicKey::from_bytes(pk);
-    let sk_obj = SecretKey::from_bytes(sk);
+    let pk_obj = PQPublicKey::from_bytes(&pk).unwrap();
+    let sk_obj = PQSecretKey::from_bytes(&sk).unwrap();
 
     let message = b"Serialization test";
 
@@ -357,8 +357,8 @@ fn signature_serialization() {
 #[test]
 fn signature_length_validation() {
     let (pk, sk) = Dilithium2Scheme::keygen_from_seed(&[42; 32]).expect("keygen should succeed");
-    let pk_obj = PublicKey::from_bytes(pk);
-    let sk_obj = SecretKey::from_bytes(sk);
+    let pk_obj = PQPublicKey::from_bytes(&pk).unwrap();
+    let sk_obj = PQSecretKey::from_bytes(&sk).unwrap();
 
     let message = b"Test message";
     let sig =
@@ -395,8 +395,8 @@ fn signature_length_validation() {
 #[test]
 fn domain_separation_protection() {
     let (pk, sk) = Dilithium2Scheme::keygen_from_seed(&[42; 32]).expect("keygen should succeed");
-    let pk_obj = PublicKey::from_bytes(pk);
-    let sk_obj = SecretKey::from_bytes(sk);
+    let pk_obj = PQPublicKey::from_bytes(&pk).unwrap();
+    let sk_obj = PQSecretKey::from_bytes(&sk).unwrap();
 
     let message = b"Important transaction";
 
@@ -433,8 +433,8 @@ fn domain_separation_protection() {
 #[test]
 fn corrupted_signature_rejection() {
     let (pk, sk) = Dilithium2Scheme::keygen_from_seed(&[42; 32]).expect("keygen should succeed");
-    let pk_obj = PublicKey::from_bytes(pk);
-    let sk_obj = SecretKey::from_bytes(sk);
+    let pk_obj = PQPublicKey::from_bytes(&pk).unwrap();
+    let sk_obj = PQSecretKey::from_bytes(&sk).unwrap();
 
     let message = b"Test message";
     let sig =
