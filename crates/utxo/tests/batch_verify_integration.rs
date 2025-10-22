@@ -125,7 +125,7 @@ fn create_test_block(prev_hash: [u8; 32], txs: Vec<Tx>, time: u64) -> Block {
 /// Test: Block with many transactions uses parallel batch verification
 #[test]
 fn block_with_many_transactions_uses_batch_verify() {
-    let params = ChainParams::default();
+    let _params = ChainParams::default();
 
     // Generate multiple keypairs to simulate different users
     let mut keypairs = Vec::new();
@@ -138,7 +138,7 @@ fn block_with_many_transactions_uses_batch_verify() {
     // Create UTXO backend with initial outputs (from genesis/previous block)
     let mut backend = TestUtxoBackend::default();
 
-    for (i, (public, _)) in keypairs.iter().enumerate() {
+    for (i, (_public, _)) in keypairs.iter().enumerate() {
         let txid = [i as u8; 32];
         let outpoint = OutPoint::new(txid, 0);
         let output = create_output([i as u8; 32]);
@@ -381,7 +381,7 @@ fn large_batch_validates_correctly() {
     let block = create_test_block([0; 32], vec![create_coinbase(1000), tx], 1000);
 
     // Record metrics and timing
-    let calls_before = crypto::get_batch_verify_calls_total();
+    let _calls_before = crypto::get_batch_verify_calls_total();
     let items_before = crypto::get_batch_verify_items_total();
     let duration_before = crypto::get_batch_verify_duration_us_total();
 
@@ -394,7 +394,7 @@ fn large_batch_validates_correctly() {
     let elapsed = start.elapsed();
 
     // Verify metrics
-    let calls_after = crypto::get_batch_verify_calls_total();
+    let _calls_after = crypto::get_batch_verify_calls_total();
     let items_after = crypto::get_batch_verify_items_total();
     let duration_after = crypto::get_batch_verify_duration_us_total();
 

@@ -272,8 +272,6 @@ fn property_batch_verify_random_sizes() {
 #[test]
 fn fuzz_batch_verify_with_invalid_signatures() {
     use crypto::{VerifyItem, batch_verify_v2, BatchVerifyOutcome};
-    use rand::RngCore;
-    use rand::rngs::OsRng;
 
     const BATCH_SIZE: usize = 20;
     const INVALID_POSITIONS: &[usize] = &[0, 5, 10, 15, 19]; // Positions to corrupt
@@ -344,7 +342,7 @@ fn fuzz_batch_verify_input_lengths() {
     use crypto::{VerifyItem, batch_verify_v2};
 
     // Test edge cases for message and signature lengths
-    let test_cases = vec![
+    let test_cases = [
         // (message_len, sig_len, should_fail)
         (0, Dilithium2Scheme::SIGNATURE_BYTES, false),       // Empty message OK
         (1, Dilithium2Scheme::SIGNATURE_BYTES, false),       // Minimal message OK
