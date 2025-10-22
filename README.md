@@ -161,6 +161,7 @@ For scaling strategy and future optimizations:
 * [Implementation blueprint (v0.9)](./spec/blueprint.md) – strategic MVP plan.
 * [`spec/build.md`](./spec/build.md) – build & release handbook.
 * [`spec/README.md`](./spec/README.md) – specifications structure.
+* **[Batch Signature Verification](./docs/crypto/batch-verify.md)** – High-performance parallel verification API (6-8x speedup).
 * **[Cryptography Runtime Analysis](./docs/crypto/runtime-sizes.md)** – Memory footprint, CBOR canonicity, and performance analysis for post-quantum signatures.
 * **[Storage Performance Tuning](./docs/perf/storage.md)** – RocksDB configuration and optimization guide.
 * **[P2P Scaling Strategy](./docs/p2p-scaling-strategy.md)** – Network capacity and mainnet roadmap.

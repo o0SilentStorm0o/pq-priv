@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - Sprint 6: Batch Signature Verification
+
+- **High-performance batch verification API** (`batch_verify_v2()`) with 6-8x speedup
+  - Parallel verification using Rayon thread pool
+  - Automatic threshold switching (sequential < 32 signatures, parallel ≥ 32)
+  - Runtime-configurable via `CRYPTO_VERIFY_THREADS`, `CRYPTO_VERIFY_THRESHOLD`, `CRYPTO_MAX_BATCH_SIZE`
+  - Integrated into consensus validation (`consume_inputs()` in UTXO crate)
+- **Prometheus metrics for signature verification**
+  - `batch_verify_calls_total` - Total batch_verify_v2() invocations
+  - `batch_verify_items_total` - Total signatures processed
+  - `batch_verify_invalid_total` - Invalid signatures detected
+  - `batch_verify_duration_us_total` - Cumulative verification time
+  - Exportable via `/metrics` endpoint in node crate
+- **Comprehensive documentation** (`docs/crypto/batch-verify.md`)
+  - API reference, configuration guide, benchmark results
+  - Security considerations (domain separation, zeroization)
+  - Usage patterns, troubleshooting, testing guide
+- **Security hardening**
+  - Extended zeroization to CBOR buffers in `domain_separated_hash()`
+  - All sensitive message data automatically cleared from memory
+- **Test coverage** (128 workspace tests)
+  - 8 unit tests (empty batch, mixed validity, threshold switching, max size protection)
+  - 5 integration tests (consensus-level validation, multi-input tx, large batches)
+  - 5 fuzz/property tests (random sizes, corrupted signatures, determinism)
+- **Performance benchmarks** (Criterion)
+  - Single verify baseline: 111 µs per signature (9 Kelem/s)
+  - Batch verify/32: 18.3 µs per signature → **6.1x speedup** (54 Kelem/s)
+  - Batch verify/128: 15.5 µs per signature → **7.2x speedup** (65 Kelem/s)
+  - Batch verify/512: 13.8 µs per signature → **8.0x speedup** (73 Kelem/s)
+  - Exceeds 2-5x target for typical block validation scenarios
+
 ### Added
 - Complete RPC server with `/health`, `/chain/tip`, and `/metrics` endpoints
 - Development mining endpoint `/dev/mine` (feature-gated behind `devnet`)
