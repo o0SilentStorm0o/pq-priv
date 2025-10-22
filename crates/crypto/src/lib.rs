@@ -16,6 +16,7 @@
 
 use std::convert::TryInto;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 
 use blake3::derive_key;
 #[cfg(feature = "dev_stub_signing")]
@@ -30,6 +31,7 @@ use rand::rngs::OsRng;
 use rand_chacha::ChaCha20Rng;
 #[cfg(feature = "dev_stub_signing")]
 use rand_core::SeedableRng;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
 use thiserror::Error;
@@ -37,6 +39,82 @@ use zeroize::{Zeroize, Zeroizing};
 
 /// Length (in bytes) of keys and tags produced by the placeholder scheme.
 pub const KEY_LEN: usize = 32;
+
+/// Maximum allowed message length for signature verification (16 MB).
+/// Protects against DoS attacks via extremely large messages.
+pub const MAX_MESSAGE_LEN: usize = 16 * 1024 * 1024;
+
+/// Maximum batch size for batch_verify operations (100,000 items).
+/// Protects against DoS attacks via oversized batches.
+pub const DEFAULT_MAX_BATCH_SIZE: usize = 100_000;
+
+/// Default threshold for switching from sequential to parallel verification.
+/// Batches smaller than this use sequential verification to avoid Rayon overhead.
+const DEFAULT_VERIFY_THRESHOLD: usize = 32;
+
+/// Batch verification configuration (lazy-initialized from ENV).
+struct BatchVerifyConfig {
+    /// Number of threads for parallel verification (1 to num_cpus)
+    threads: usize,
+    /// Threshold for parallel/sequential switch
+    threshold: usize,
+    /// Maximum batch size
+    max_batch_size: usize,
+}
+
+static BATCH_CONFIG: OnceLock<BatchVerifyConfig> = OnceLock::new();
+
+/// Get or initialize batch verification configuration from environment variables.
+///
+/// ENV variables (all optional):
+/// - `CRYPTO_VERIFY_THREADS`: Number of threads (default: min(8, num_cpus))
+/// - `CRYPTO_VERIFY_THRESHOLD`: Parallel threshold (default: 32)
+/// - `CRYPTO_MAX_BATCH_SIZE`: Max batch size (default: 100,000)
+fn batch_config() -> &'static BatchVerifyConfig {
+    BATCH_CONFIG.get_or_init(|| {
+        let num_cpus = num_cpus::get();
+        
+        let threads = std::env::var("CRYPTO_VERIFY_THREADS")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or_else(|| num_cpus.min(8))
+            .max(1)
+            .min(num_cpus);
+
+        let threshold = std::env::var("CRYPTO_VERIFY_THRESHOLD")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_VERIFY_THRESHOLD)
+            .max(1);
+
+        let max_batch_size = std::env::var("CRYPTO_MAX_BATCH_SIZE")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_MAX_BATCH_SIZE)
+            .max(1);
+
+        BatchVerifyConfig {
+            threads,
+            threshold,
+            max_batch_size,
+        }
+    })
+}
+
+/// Get the configured number of verification threads.
+pub fn get_verify_threads() -> usize {
+    batch_config().threads
+}
+
+/// Get the configured parallel verification threshold.
+pub fn get_verify_threshold() -> usize {
+    batch_config().threshold
+}
+
+/// Get the configured maximum batch size.
+pub fn get_max_batch_size() -> usize {
+    batch_config().max_batch_size
+}
 
 /// Global counter for zeroize operations (observability/audit metric).
 ///
