@@ -512,6 +512,7 @@ dependencies = [
  "rand_core 0.6.4",
  "serde",
  "serde_bytes",
+ "serde_json",
  "sha3",
  "thiserror 1.0.69",
 ]
