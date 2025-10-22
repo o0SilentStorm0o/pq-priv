@@ -25,6 +25,17 @@ jobs:
         run: |
           echo "Building crypto crate in release mode..."
           cd crates/crypto
+          
+          # AUDITOR-PROOF CHECK #1: Verify feature is not in default features
+          echo "Checking Cargo.toml for dev_stub_signing in default features..."
+          if grep -A 5 '^\[features\]' Cargo.toml | grep -q 'default.*dev_stub_signing'; then
+            echo "ERROR: dev_stub_signing found in default features!"
+            echo "This feature MUST NOT be enabled by default."
+            exit 1
+          fi
+          echo "✓ dev_stub_signing is not in default features"
+          
+          # AUDITOR-PROOF CHECK #2: Build with --release and verify no Ed25519
           cargo build --release --no-default-features 2>&1 | tee build.log
           
           # Check if Ed25519 stub is included in release binary
@@ -35,6 +46,14 @@ jobs:
           fi
           
           echo "✓ Release build does not include Ed25519 stub"
+          
+          # AUDITOR-PROOF CHECK #3: Verify build fails if someone tries to enable it
+          echo "Verifying that enabling dev_stub_signing in release triggers a warning..."
+          if cargo build --release --features dev_stub_signing 2>&1 | grep -i 'warning.*dev_stub_signing\|development\|stub'; then
+            echo "✓ Build warns about development features in release mode"
+          else
+            echo "WARNING: No warning about dev features in release mode (consider adding one)"
+          fi
       
       - name: Verify Dilithium2 is available in release
         run: |

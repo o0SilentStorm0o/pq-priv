@@ -3,14 +3,19 @@ name = "crypto"
 version = "0.1.0"
 edition = "2024"
 license.workspace = true
+build = "build.rs"
 
 [features]
-default = ["dev_stub_signing"]
-# Enable Ed25519 as a development stub for testing
+# AUDITOR NOTE: default features MUST NOT include dev_stub_signing
+# dev_stub_signing is for development/testing only (non-PQC Ed25519)
+default = []
+# Enable Ed25519 as a development stub for testing (NOT for production)
+# This feature will cause a compile error if enabled in release builds
 dev_stub_signing = []
 
 [dependencies]
 blake3 = "1.5"
+ciborium = "0.2"
 hex = "0.4"
 log = "0.4"
 rand = "0.8"
