@@ -517,6 +517,7 @@ dependencies = [
  "serde",
  "thiserror 1.0.69",
  "tx",
+ "utxo",
 ]
 
 [[package]]

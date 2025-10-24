@@ -13,3 +13,6 @@ thiserror = "1.0"
 tx = { path = "../tx", version = "0.1.0" }
 codec = { path = "../codec", version = "0.1.0" }
 crypto = { path = "../crypto", version = "0.1.0" }
+
+[dev-dependencies]
+utxo = { path = "../utxo", version = "0.1.0" }
