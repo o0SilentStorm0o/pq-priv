@@ -1,0 +1,10 @@
+# Fuzzing artifacts
+corpus/
+artifacts/
+target/
+Cargo.lock
+
+# Coverage data
+coverage/
+*.profraw
+*.profdata

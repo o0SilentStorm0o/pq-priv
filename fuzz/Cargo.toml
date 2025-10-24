@@ -1,0 +1,43 @@
+[package]
+name = "pq-priv-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+crypto = { path = "../crates/crypto" }
+tx = { path = "../crates/tx" }
+utxo = { path = "../crates/utxo" }
+consensus = { path = "../crates/consensus" }
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "fuzz_range_proof"
+path = "fuzz_targets/fuzz_range_proof.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_commitment_balance"
+path = "fuzz_targets/fuzz_commitment_balance.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_malformed_proofs"
+path = "fuzz_targets/fuzz_malformed_proofs.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_confidential_tx"
+path = "fuzz_targets/fuzz_confidential_tx.rs"
+test = false
+doc = false
