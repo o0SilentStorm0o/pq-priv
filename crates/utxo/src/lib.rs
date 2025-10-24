@@ -155,11 +155,19 @@ impl BlockUndo {
 }
 
 /// Apply a fully validated block to the UTXO set.
-pub fn apply_block<B: UtxoBackend>(
+///
+/// # Metrics
+/// Optional `metrics_fn` callback for recording privacy validation metrics.
+/// Called with ("verify_success", duration_ms), ("invalid_proof", 0), or ("balance_failure", 0).
+pub fn apply_block<B: UtxoBackend, F>(
     store: &mut B,
     block: &Block,
     height: u64,
-) -> Result<BlockUndo, UtxoError> {
+    metrics_fn: Option<F>,
+) -> Result<BlockUndo, UtxoError>
+where
+    F: FnMut(&str, u64) + Clone,
+{
     if block.txs.is_empty() {
         return Err(UtxoError::EmptyBlock);
     }
@@ -175,7 +183,7 @@ pub fn apply_block<B: UtxoBackend>(
         let binding = tx::binding_hash(&tx.outputs, &tx.witness);
         
         // Validate confidential transaction rules (if any confidential outputs present)
-        validate_confidential_tx(store, tx)?;
+        validate_confidential_tx(store, tx, metrics_fn.clone())?;
         
         if tx_index == 0 {
             if !tx.inputs.is_empty() {
@@ -221,10 +229,20 @@ pub fn apply_block<B: UtxoBackend>(
 /// 3. Range proofs are valid
 /// 4. Commitments balance (inputs - outputs = 0)
 /// 5. DoS protection: max proofs per transaction
-fn validate_confidential_tx<B: UtxoBackend>(
+///
+/// # Metrics
+/// If `record_metrics` callback is provided, it will be called with:
+/// - `("verify_success", duration_ms)` for each successful verification
+/// - `("invalid_proof", 0)` for each invalid proof
+/// - `("balance_failure", 0)` for commitment balance failures
+fn validate_confidential_tx<B: UtxoBackend, F>(
     store: &B,
     tx: &Tx,
-) -> Result<(), UtxoError> {
+    mut record_metrics: Option<F>,
+) -> Result<(), UtxoError>
+where
+    F: FnMut(&str, u64),
+{
     // Count confidential outputs and collect commitments
     let mut confidential_outputs = Vec::new();
     let mut output_commitments = Vec::new();
@@ -265,8 +283,20 @@ fn validate_confidential_tx<B: UtxoBackend>(
         let commitment = output.commitment.as_ref().unwrap(); // Safe: we checked above
         let proof = &tx.witness.range_proofs[i];
 
-        if !verify_range(commitment, proof) {
+        // Measure verification latency
+        let start = std::time::Instant::now();
+        let valid = verify_range(commitment, proof);
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        if !valid {
+            if let Some(ref mut metrics_fn) = record_metrics {
+                metrics_fn("invalid_proof", 0);
+            }
             return Err(UtxoError::InvalidRangeProof);
+        }
+
+        if let Some(ref mut metrics_fn) = record_metrics {
+            metrics_fn("verify_success", duration_ms);
         }
     }
 
@@ -285,6 +315,9 @@ fn validate_confidential_tx<B: UtxoBackend>(
     // Only check balance if we have both input and output commitments
     if !input_commitments.is_empty() || !output_commitments.is_empty() {
         if !balance_commitments(&input_commitments, &output_commitments) {
+            if let Some(ref mut metrics_fn) = record_metrics {
+                metrics_fn("balance_failure", 0);
+            }
             return Err(UtxoError::UnbalancedCommitments);
         }
     }

@@ -273,9 +273,8 @@ fn coinbase_tx(stamp: u64) -> Tx {
     let scan = material.derive_scan_keypair(0);
     let spend = material.derive_spend_keypair(0);
     let stealth = build_stealth_blob(&scan.public, &spend.public, &stamp.to_le_bytes());
-    let commitment = crypto::commitment(50, &stamp.to_le_bytes());
     TxBuilder::new()
-        .add_output(Output::new(stealth, commitment, OutputMeta::default()))
+        .add_output(Output::new(stealth, 50, OutputMeta::default()))
         .set_witness(Witness {
             range_proofs: Vec::new(),
             stamp,

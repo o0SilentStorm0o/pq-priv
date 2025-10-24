@@ -14,9 +14,9 @@ use tracing::{error, info};
 use tx::{Output, OutputMeta, Tx, TxBuilder, Witness, build_stealth_blob};
 
 use node::{
-    ChainState, NodeConfig, Relay, RpcContext, StorageMetrics, SyncManager, TxPool,
-    run_block_sync_task, run_chain_event_loop, run_peer_event_loop, run_storage_metrics_task,
-    spawn_rpc_server,
+    ChainState, NodeConfig, PrivacyMetrics, Relay, RpcContext, StorageMetrics, SyncManager,
+    TxPool, run_block_sync_task, run_chain_event_loop, run_peer_event_loop,
+    run_storage_metrics_task, spawn_rpc_server,
 };
 use p2p::{NodeAddr, P2pConfig, Services, Version, start_network};
 
@@ -184,12 +184,22 @@ async fn run_node(args: RunArgs) -> anyhow::Result<()> {
 
     // Create storage metrics collector (shared between RPC and background task)
     let storage_metrics = Arc::new(StorageMetrics::new());
+    
+    // Create privacy metrics collector (shared between ChainState and RPC)
+    let privacy_metrics = Arc::new(PrivacyMetrics::new());
+    
+    // Attach privacy metrics to ChainState for validation tracking
+    {
+        let mut guard = chain.lock();
+        guard.attach_privacy_metrics(Arc::clone(&privacy_metrics));
+    }
 
     let rpc_context = Arc::new(RpcContext::new(
         Arc::clone(&mempool),
         Arc::clone(&chain),
         network.clone(),
         Arc::clone(&storage_metrics),
+        Arc::clone(&privacy_metrics),
     ));
     let (rpc_handle, rpc_addr) =
         spawn_rpc_server(Arc::clone(&rpc_context), config.rpc_listen).await?;
