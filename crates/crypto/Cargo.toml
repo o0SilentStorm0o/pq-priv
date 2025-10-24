@@ -35,7 +35,9 @@ rayon = { version = "1.10", default-features = false }
 num_cpus = "1.16"
 # Privacy layer dependencies (Pedersen commitments + Bulletproofs range proofs)
 curve25519-dalek = "4"
+curve25519-dalek-ng = "4"  # Required for bulletproofs compatibility
 bulletproofs = "4"
+merlin = "3"
 
 [dev-dependencies]
 serde_json = "1.0"

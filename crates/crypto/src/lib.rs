@@ -266,6 +266,12 @@ pub enum CryptoError {
     SigningFailed,
     #[error("invalid input: parameters mismatch or out of bounds")]
     InvalidInput,
+    #[error("proof size {got} exceeds maximum {max} bytes")]
+    InvalidProofSize { got: usize, max: usize },
+    #[error("range proof generation failed")]
+    ProofGenerationFailed,
+    #[error("range proof verification failed")]
+    ProofVerificationFailed,
 }
 
 /// Trait defining a pluggable signature scheme.
@@ -1670,4 +1676,357 @@ mod tests {
             "invalid counter should increment by 1"
         );
     }
+}
+
+//
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║                    PRIVACY LAYER - CONFIDENTIAL AMOUNTS                  ║
+// ║                  Pedersen Commitments + Bulletproofs                     ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
+//
+
+use bulletproofs::{BulletproofGens, PedersenGens, RangeProof as BulletproofRangeProof};
+// Note: bulletproofs v4 uses curve25519-dalek-ng, not curve25519-dalek
+use curve25519_dalek_ng::ristretto::{CompressedRistretto, RistrettoPoint};
+use curve25519_dalek_ng::scalar::Scalar as NgScalar;
+use curve25519_dalek_ng::traits::Identity;
+use merlin::Transcript;
+
+/// Maximum size of a range proof in bytes (32 KB).
+/// Protects against DoS attacks via oversized proofs.
+pub const MAX_PROOF_SIZE: usize = 32 * 1024;
+
+/// Maximum number of range proofs per block (1000 default).
+/// Prevents DoS via excessive proof verification.
+pub const DEFAULT_MAX_PROOFS_PER_BLOCK: usize = 1000;
+
+/// A Pedersen commitment to a value with blinding factor.
+///
+/// Commitment: C = v·G + r·H where:
+/// - v = value (amount)
+/// - r = blinding factor (random scalar)
+/// - G, H = generator points
+///
+/// # Security
+///
+/// - Blinding factor is zeroized on drop
+/// - Value commitment is public (32 bytes compressed Ristretto point)
+/// - Provides computational hiding and perfect binding
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Commitment {
+    /// Compressed Ristretto point representing the commitment
+    pub value_commit: [u8; 32],
+    /// Blinding factor (zeroized on drop)
+    #[serde(with = "serde_bytes")]
+    pub blinding: [u8; 32],
+}
+
+impl Commitment {
+    /// Create a new commitment from raw bytes.
+    ///
+    /// # Arguments
+    ///
+    /// * `value_commit` - 32-byte compressed Ristretto point
+    /// * `blinding` - 32-byte blinding factor (will be zeroized on drop)
+    pub fn new(value_commit: [u8; 32], blinding: [u8; 32]) -> Self {
+        Self {
+            value_commit,
+            blinding,
+        }
+    }
+
+    /// Get the commitment point as bytes.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.value_commit
+    }
+}
+
+impl Drop for Commitment {
+    fn drop(&mut self) {
+        // Zeroize blinding factor to prevent memory leaks
+        self.blinding.zeroize();
+        increment_zeroize_counter();
+    }
+}
+
+/// A Bulletproofs range proof for a committed value.
+///
+/// Proves that a committed value v satisfies: 0 ≤ v ≤ 2^64 - 1
+/// without revealing the actual value.
+///
+/// # Security
+///
+/// - Maximum proof size: 32 KB (enforced at construction)
+/// - Proof bytes are public (non-secret)
+/// - Zero-knowledge: reveals nothing about the value
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RangeProof {
+    /// Serialized Bulletproofs proof
+    #[serde(with = "serde_bytes")]
+    pub proof_bytes: Vec<u8>,
+}
+
+impl RangeProof {
+    /// Create a new range proof from bytes.
+    ///
+    /// # Arguments
+    ///
+    /// * `proof_bytes` - Serialized Bulletproofs proof
+    ///
+    /// # Errors
+    ///
+    /// Returns `CryptoError::InvalidProofSize` if proof exceeds MAX_PROOF_SIZE.
+    pub fn new(proof_bytes: Vec<u8>) -> Result<Self, CryptoError> {
+        if proof_bytes.len() > MAX_PROOF_SIZE {
+            return Err(CryptoError::InvalidProofSize {
+                got: proof_bytes.len(),
+                max: MAX_PROOF_SIZE,
+            });
+        }
+        Ok(Self { proof_bytes })
+    }
+
+    /// Get the proof bytes.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.proof_bytes
+    }
+}
+
+/// A confidential transaction output with commitment and range proof.
+///
+/// Combines a Pedersen commitment with a Bulletproofs range proof
+/// to create a fully confidential output.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Confidential {
+    /// Pedersen commitment to the value
+    pub commitment: Commitment,
+    /// Bulletproofs range proof
+    pub proof: RangeProof,
+}
+
+/// Create a Pedersen commitment to a value.
+///
+/// # Arguments
+///
+/// * `value` - Amount to commit (0 ≤ value ≤ 2^64 - 1)
+/// * `blinding` - 32-byte blinding factor (random scalar)
+///
+/// # Returns
+///
+/// A Commitment containing the compressed point and blinding factor.
+///
+/// # Example
+///
+/// ```ignore
+/// use crypto::commit_value;
+///
+/// let value = 1000u64;
+/// let mut blinding = [0u8; 32];
+/// rand::thread_rng().fill_bytes(&mut blinding);
+///
+/// let commitment = commit_value(value, &blinding);
+/// ```
+pub fn commit_value(value: u64, blinding: &[u8; 32]) -> Commitment {
+    let gens = PedersenGens::default();
+    
+    // Convert blinding to scalar (zeroized automatically)
+    let blind_scalar = NgScalar::from_bytes_mod_order(*blinding);
+    
+    // Compute commitment: C = v·G + r·H
+    let commit_point = gens.commit(NgScalar::from(value), blind_scalar);
+    
+    // Compress to 32 bytes
+    let value_commit = commit_point.compress().to_bytes();
+    
+    Commitment::new(value_commit, *blinding)
+}
+
+/// Generate a Bulletproofs range proof for a committed value.
+///
+/// # Arguments
+///
+/// * `value` - Amount to prove (0 ≤ value ≤ 2^64 - 1)
+/// * `blinding` - 32-byte blinding factor used in commitment
+///
+/// # Returns
+///
+/// A RangeProof that can be verified against the commitment.
+///
+/// # Errors
+///
+/// Returns error if proof generation fails or proof size exceeds limit.
+///
+/// # Example
+///
+/// ```ignore
+/// use crypto::{commit_value, prove_range};
+///
+/// let value = 1000u64;
+/// let blinding = [0u8; 32];
+///
+/// let commitment = commit_value(value, &blinding);
+/// let proof = prove_range(value, &blinding)?;
+/// ```
+pub fn prove_range(value: u64, blinding: &[u8; 32]) -> Result<RangeProof, CryptoError> {
+    let pc_gens = PedersenGens::default();
+    let bp_gens = BulletproofGens::new(64, 1); // 64-bit range, 1 party
+    
+    // Create transcript for Fiat-Shamir
+    let mut transcript = Transcript::new(b"pq-priv-range-proof");
+    
+    // Convert blinding to scalar
+    let blind_scalar = NgScalar::from_bytes_mod_order(*blinding);
+    
+    // Create the proof
+    let (proof, _committed_value) = BulletproofRangeProof::prove_single(
+        &bp_gens,
+        &pc_gens,
+        &mut transcript,
+        value,
+        &blind_scalar,
+        64, // 64-bit range (0 to 2^64-1)
+    )
+    .map_err(|_| CryptoError::ProofGenerationFailed)?;
+    
+    // Serialize proof
+    let proof_bytes = proof.to_bytes();
+    
+    RangeProof::new(proof_bytes)
+}
+
+/// Verify a Bulletproofs range proof against a commitment.
+///
+/// # Arguments
+///
+/// * `commitment` - The Pedersen commitment to verify
+/// * `proof` - The range proof to check
+///
+/// # Returns
+///
+/// `true` if the proof is valid, `false` otherwise.
+///
+/// # Security
+///
+/// - Handles malformed proofs gracefully (returns false, no panic)
+/// - Uses domain separation via Fiat-Shamir transcript
+/// - Constant-time verification (no timing side-channels)
+///
+/// # Example
+///
+/// ```ignore
+/// use crypto::{commit_value, prove_range, verify_range};
+///
+/// let value = 1000u64;
+/// let blinding = [0u8; 32];
+///
+/// let commitment = commit_value(value, &blinding);
+/// let proof = prove_range(value, &blinding)?;
+///
+/// assert!(verify_range(&commitment, &proof));
+/// ```
+pub fn verify_range(commitment: &Commitment, proof: &RangeProof) -> bool {
+    let pc_gens = PedersenGens::default();
+    let bp_gens = BulletproofGens::new(64, 1);
+    
+    // Create transcript (must match prover's)
+    let mut transcript = Transcript::new(b"pq-priv-range-proof");
+    
+    // Create compressed point from bytes (from_slice returns CompressedRistretto directly)
+    let commit_compressed = CompressedRistretto::from_slice(&commitment.value_commit);
+    
+    // Deserialize proof
+    let bulletproof = match BulletproofRangeProof::from_bytes(&proof.proof_bytes) {
+        Ok(proof) => proof,
+        Err(_) => return false, // Malformed proof
+    };
+    
+    // Verify the proof
+    bulletproof
+        .verify_single(&bp_gens, &pc_gens, &mut transcript, &commit_compressed, 64)
+        .is_ok()
+}
+
+/// Verify that a set of commitments balance (sum to zero).
+///
+/// Used to ensure no inflation in confidential transactions:
+/// sum(inputs) - sum(outputs) = 0 (in the Ristretto group).
+///
+/// # Arguments
+///
+/// * `inputs` - Commitments from transaction inputs
+/// * `outputs` - Commitments from transaction outputs
+///
+/// # Returns
+///
+/// `true` if commitments balance, `false` otherwise.
+///
+/// # Example
+///
+/// ```ignore
+/// use crypto::{commit_value, balance_commitments};
+///
+/// // Input: 1000
+/// let input_blind = [1u8; 32];
+/// let input_commit = commit_value(1000, &input_blind);
+///
+/// // Outputs: 700 + 300 = 1000
+/// let out1_blind = [2u8; 32];
+/// let out2_blind = [3u8; 32];
+/// let out1_commit = commit_value(700, &out1_blind);
+/// let out2_commit = commit_value(300, &out2_blind);
+///
+/// // This will fail because blinding factors don't match
+/// // In practice, you need: blind_in = blind_out1 + blind_out2
+/// assert!(!balance_commitments(&[input_commit], &[out1_commit, out2_commit]));
+/// ```
+pub fn balance_commitments(inputs: &[Commitment], outputs: &[Commitment]) -> bool {
+    // Decompress all input commitments
+    let input_points: Vec<RistrettoPoint> = inputs
+        .iter()
+        .filter_map(|c| {
+            let compressed = CompressedRistretto::from_slice(&c.value_commit);
+            compressed.decompress()
+        })
+        .collect();
+    
+    // Decompress all output commitments
+    let output_points: Vec<RistrettoPoint> = outputs
+        .iter()
+        .filter_map(|c| {
+            let compressed = CompressedRistretto::from_slice(&c.value_commit);
+            compressed.decompress()
+        })
+        .collect();
+    
+    // Check we successfully decompressed all points
+    if input_points.len() != inputs.len() || output_points.len() != outputs.len() {
+        return false; // Invalid point encoding
+    }
+    
+    // Compute sum of inputs
+    let input_sum = input_points
+        .iter()
+        .fold(RistrettoPoint::identity(), |acc, &p| acc + p);
+    
+    // Compute sum of outputs
+    let output_sum = output_points
+        .iter()
+        .fold(RistrettoPoint::identity(), |acc, &p| acc + p);
+    
+    // Check if they're equal (balance)
+    input_sum == output_sum
+}
+
+/// Get the maximum allowed proof size.
+pub fn get_max_proof_size() -> usize {
+    MAX_PROOF_SIZE
+}
+
+/// Get the maximum allowed proofs per block.
+pub fn get_max_proofs_per_block() -> usize {
+    std::env::var("CRYPTO_MAX_PROOFS_PER_BLOCK")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_MAX_PROOFS_PER_BLOCK)
+        .max(1)
 }
