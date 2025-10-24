@@ -30,6 +30,55 @@
 
 ---
 
+## Privacy Features (Phase 1)
+
+**Sprint 8** introduces **confidential transactions** using Pedersen commitments and Bulletproofs:
+
+- 🔒 **Amount Confidentiality** – Transaction values hidden with cryptographic commitments
+- 🛡️ **Inflation Protection** – Zero-knowledge range proofs prevent value creation
+- ⚖️ **DoS Resistance** – Proof size limits (32KB) and per-block caps (1000 proofs)
+- 📊 **Privacy Metrics** – Prometheus monitoring for verification performance
+- 🧪 **Comprehensive Testing** – 39 unit/integration tests + 4 fuzz targets
+
+**Key Components:**
+
+| Component | Description | Performance |
+|-----------|-------------|-------------|
+| **Pedersen Commitments** | Hide values with homomorphic cryptography | ~48 µs per commitment |
+| **Bulletproofs** | Zero-knowledge range proofs (64-bit) | ~24ms generation, ~15ms verification |
+| **Balance Verification** | Prevent inflation via commitment equality | O(n) for n commitments |
+| **Range Proofs** | Prove value in [0, 2^64-1] without revealing it | ~672 bytes per proof |
+
+**Usage Example:**
+```rust
+use crypto::{commit_value, prove_range, verify_range};
+
+// Create confidential output
+let value = 100_000u64;
+let blinding = random_32_bytes();
+let commitment = commit_value(value, &blinding);
+let proof = prove_range(value, &blinding)?;
+
+// Verify (consensus layer)
+verify_range(&commitment, &proof)?; // ~15ms
+```
+
+**Security Guarantees:**
+- ✅ **128-bit security** against discrete logarithm attacks
+- ✅ **Soundness**: < 2^-128 probability of forging valid proof
+- ✅ **Zero-knowledge**: Verifier learns nothing except value is in range
+- ⚠️ **Not quantum-resistant** (requires lattice-based commitments in Phase 2)
+
+**Testing Coverage:**
+- 22 crypto unit tests (commitments, proofs, balance, security)
+- 9 TX integration tests (output creation, serialization, full flow)
+- 8 consensus tests (validation, rejection, DoS protection)
+- 4 fuzz targets (25+ strategies for robustness testing)
+
+📖 **Complete Documentation**: [`docs/privacy.md`](./docs/privacy.md) (823 lines)
+
+---
+
 ---
 
 ## Node architecture highlights
@@ -161,6 +210,7 @@ For scaling strategy and future optimizations:
 * [Implementation blueprint (v0.9)](./spec/blueprint.md) – strategic MVP plan.
 * [`spec/build.md`](./spec/build.md) – build & release handbook.
 * [`spec/README.md`](./spec/README.md) – specifications structure.
+* **[Privacy Features Guide](./docs/privacy.md)** – Confidential transactions with Pedersen commitments and Bulletproofs (Phase 1).
 * **[Batch Signature Verification](./docs/crypto/batch-verify.md)** – High-performance parallel verification API (6-8x speedup).
 * **[Cryptography Runtime Analysis](./docs/crypto/runtime-sizes.md)** – Memory footprint, CBOR canonicity, and performance analysis for post-quantum signatures.
 * **[Storage Performance Tuning](./docs/perf/storage.md)** – RocksDB configuration and optimization guide.
