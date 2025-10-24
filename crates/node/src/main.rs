@@ -247,8 +247,9 @@ fn coinbase_tx(height: u64) -> Tx {
     let scan = material.derive_scan_keypair(0);
     let spend = material.derive_spend_keypair(0);
     let stealth = build_stealth_blob(&scan.public, &spend.public, &height.to_le_bytes());
-    let commitment = crypto::commitment(50, &height.to_le_bytes());
-    let output = Output::new(stealth, commitment, OutputMeta::default());
+    
+    // Create a transparent output with 50 coins
+    let output = Output::new(stealth, 50, OutputMeta::default());
 
     let witness_stamp = if std::env::var("E2E_FIXED_GENESIS").is_ok() {
         1700000000u64 // Fixed timestamp for E2E

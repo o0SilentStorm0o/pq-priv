@@ -4,7 +4,7 @@ use std::fmt;
 
 use blake3::Hasher;
 use codec::to_vec_cbor;
-use crypto::{self, AlgTag, PublicKey, Signature, SpendKeypair, compute_link_tag};
+use crypto::{self, AlgTag, Commitment, PublicKey, RangeProof, Signature, SpendKeypair, compute_link_tag};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -35,21 +35,61 @@ pub struct OutputMeta {
 }
 
 /// Transaction output representation.
+///
+/// Supports both transparent and confidential outputs:
+/// - Transparent: `value` is set, `commitment` is None
+/// - Confidential: `value` is 0, `commitment` is Some(...)
+///
+/// # Consensus Rules
+///
+/// If `commitment.is_some()`:
+/// - `value` MUST be 0
+/// - A corresponding range proof MUST be present in `Witness::range_proofs`
+/// - The commitment MUST be valid and balance with inputs
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Output {
     #[serde(with = "serde_bytes")]
     pub stealth_blob: Vec<u8>,
+    /// Transparent value (0 if using commitment)
+    pub value: u64,
+    /// Optional Pedersen commitment for confidential amounts
+    pub commitment: Option<Commitment>,
+    /// Legacy field (kept for backward compatibility, unused if commitment is present)
+    #[serde(default)]
     pub value_commitment: [u8; 32],
     pub output_meta: OutputMeta,
 }
 
 impl Output {
-    pub fn new(stealth_blob: Vec<u8>, value_commitment: [u8; 32], output_meta: OutputMeta) -> Self {
+    /// Create a new transparent output.
+    pub fn new(stealth_blob: Vec<u8>, value: u64, output_meta: OutputMeta) -> Self {
         Self {
             stealth_blob,
-            value_commitment,
+            value,
+            commitment: None,
+            value_commitment: [0u8; 32], // Unused for transparent outputs
             output_meta,
         }
+    }
+
+    /// Create a new confidential output with Pedersen commitment.
+    pub fn new_confidential(
+        stealth_blob: Vec<u8>,
+        commitment: Commitment,
+        output_meta: OutputMeta,
+    ) -> Self {
+        Self {
+            stealth_blob,
+            value: 0, // Must be 0 for confidential outputs
+            commitment: Some(commitment),
+            value_commitment: [0u8; 32], // Unused
+            output_meta,
+        }
+    }
+
+    /// Check if this output is confidential.
+    pub fn is_confidential(&self) -> bool {
+        self.commitment.is_some()
     }
 }
 
@@ -86,13 +126,33 @@ impl Input {
 }
 
 /// Witness data shared across the transaction.
+///
+/// Contains range proofs for confidential outputs and other auxiliary data.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Witness {
-    #[serde(with = "serde_bytes")]
-    pub range_proofs: Vec<u8>,
+    /// Range proofs for confidential outputs (one per confidential output, in order)
+    pub range_proofs: Vec<RangeProof>,
+    /// Timestamp or block height
     pub stamp: u64,
+    /// Additional data (e.g., memos, metadata)
     #[serde(with = "serde_bytes")]
     pub extra: Vec<u8>,
+}
+
+impl Witness {
+    /// Create a new witness with range proofs.
+    pub fn new(range_proofs: Vec<RangeProof>, stamp: u64, extra: Vec<u8>) -> Self {
+        Self {
+            range_proofs,
+            stamp,
+            extra,
+        }
+    }
+
+    /// Get the number of range proofs.
+    pub fn proof_count(&self) -> usize {
+        self.range_proofs.len()
+    }
 }
 
 /// Canonical transaction structure.
@@ -221,6 +281,16 @@ impl Default for TxBuilder {
 pub enum TxError {
     #[error("signature failed to verify")]
     InvalidSignature,
+    #[error("confidential output missing range proof")]
+    MissingRangeProof,
+    #[error("confidential output has non-zero value (must be 0)")]
+    InvalidConfidentialValue,
+    #[error("invalid range proof")]
+    InvalidRangeProof,
+    #[error("commitment balance check failed (inflation detected)")]
+    UnbalancedCommitments,
+    #[error("too many range proofs: {got}, max allowed: {max}")]
+    TooManyProofs { got: usize, max: usize },
 }
 
 /// Compute the binding hash over outputs and witness data.
@@ -230,7 +300,17 @@ pub fn binding_hash(outputs: &[Output], witness: &Witness) -> [u8; 32] {
     for output in outputs {
         hasher.update(&(output.stealth_blob.len() as u64).to_le_bytes());
         hasher.update(&output.stealth_blob);
-        hasher.update(&output.value_commitment);
+        
+        // Hash value or commitment
+        if let Some(ref commitment) = output.commitment {
+            hasher.update(&[1u8]); // Confidential marker
+            hasher.update(commitment.as_bytes());
+        } else {
+            hasher.update(&[0u8]); // Transparent marker
+            hasher.update(&output.value.to_le_bytes());
+        }
+        
+        hasher.update(&output.value_commitment); // Legacy field
         hasher.update(&[output.output_meta.deposit_flag as u8]);
         match &output.output_meta.deposit_id {
             Some(id) => {
@@ -243,8 +323,15 @@ pub fn binding_hash(outputs: &[Output], witness: &Witness) -> [u8; 32] {
         }
     }
     hasher.update(&witness.stamp.to_le_bytes());
+    
+    // Hash range proofs
     hasher.update(&(witness.range_proofs.len() as u64).to_le_bytes());
-    hasher.update(&witness.range_proofs);
+    for proof in &witness.range_proofs {
+        let proof_bytes = proof.as_bytes();
+        hasher.update(&(proof_bytes.len() as u64).to_le_bytes());
+        hasher.update(proof_bytes);
+    }
+    
     hasher.update(&(witness.extra.len() as u64).to_le_bytes());
     hasher.update(&witness.extra);
     hasher.finalize().into()
