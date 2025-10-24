@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ["main", "work", "feature/**"]
+    branches: ["main", "work", "feature/**", "feat/privacy/stark-phase"]
   pull_request:
   workflow_dispatch:
 
@@ -115,3 +115,32 @@ jobs:
         with:
           name: testnet-node-log
           path: .testnet/node.log
+
+  # Benchmarks job - DISABLED until Step 6 (STARK implementation complete)
+  # Enable this job after:
+  # 1. STARK prove/verify implementations are stable
+  # 2. Security parameters are finalized
+  # 3. Benchmark suite is comprehensive (prove, verify, batch operations)
+  #
+  # benchmarks:
+  #   name: performance benchmarks
+  #   runs-on: ubuntu-latest
+  #   if: false  # TODO: Enable in Sprint 9 Step 6
+  #   steps:
+  #     - name: Checkout repository
+  #       uses: actions/checkout@v4
+  #
+  #     - name: Install Rust toolchain
+  #       uses: dtolnay/rust-toolchain@stable
+  #
+  #     - name: Cache cargo
+  #       uses: Swatinem/rust-cache@v2
+  #
+  #     - name: Run STARK benchmarks
+  #       run: cargo bench -p crypto-stark --no-fail-fast
+  #
+  #     - name: Upload benchmark results
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: stark-benchmarks
+  #         path: target/criterion/

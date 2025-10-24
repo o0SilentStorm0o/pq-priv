@@ -2,6 +2,7 @@
 members = [
     "crates/node",
     "crates/crypto",
+    "crates/crypto/stark",
     "crates/spec",
     "crates/codec",
     "crates/pow",

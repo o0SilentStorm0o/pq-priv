@@ -1,0 +1,26 @@
+[package]
+name = "crypto-stark"
+version = "0.1.0"
+edition = "2021"
+authors = ["PQ-PRIV Contributors"]
+license = "MIT OR Apache-2.0"
+description = "Transparent STARK one-of-many proofs for PQ-PRIV privacy"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+rayon = "1.10"
+
+# Field arithmetic and cryptographic primitives
+# TODO: Add specific dependencies in step 2 (field ops, Poseidon2, Merkle)
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+proptest = "1.5"
+rand = "0.8"
+
+[[bench]]
+name = "stark_perf"
+harness = false
+path = "benches/stark_perf.rs"
