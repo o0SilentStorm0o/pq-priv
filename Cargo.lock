@@ -3030,6 +3030,7 @@ dependencies = [
  "crypto",
  "serde",
  "serde_bytes",
+ "serde_json",
  "serde_with",
  "thiserror 1.0.69",
 ]

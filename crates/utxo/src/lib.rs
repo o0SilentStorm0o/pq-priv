@@ -497,11 +497,7 @@ mod tests {
                     deposit_id: None,
                 },
             ))
-            .set_witness(Witness {
-                range_proofs: Vec::new(),
-                stamp: 0,
-                extra: Vec::new(),
-            })
+            .set_witness(Witness::new(Vec::new(), 0, Vec::new()))
             .build()
     }
 

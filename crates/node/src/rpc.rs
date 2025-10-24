@@ -316,11 +316,7 @@ fn build_coinbase_tx(material: &crypto::KeyMaterial, height: u64) -> tx::Tx {
 
     TxBuilder::new()
         .add_output(output)
-        .set_witness(Witness {
-            range_proofs: Vec::new(),
-            stamp: current_time(),
-            extra: Vec::new(),
-        })
+        .set_witness(Witness::new(Vec::new(), current_time(), Vec::new()))
         .build()
 }
 
@@ -533,11 +529,7 @@ mod tests {
                     deposit_id: None,
                 },
             ))
-            .set_witness(Witness {
-                range_proofs: Vec::new(),
-                stamp: seed,
-                extra: Vec::new(),
-            })
+            .set_witness(Witness::new(Vec::new(), seed, Vec::new()))
             .build()
     }
 

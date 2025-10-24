@@ -269,11 +269,7 @@ fn coinbase_tx(height: u64) -> Tx {
 
     TxBuilder::new()
         .add_output(output)
-        .set_witness(Witness {
-            range_proofs: Vec::new(),
-            stamp: witness_stamp,
-            extra: Vec::new(),
-        })
+        .set_witness(Witness::new(Vec::new(), witness_stamp, Vec::new()))
         .build()
 }
 

@@ -106,11 +106,7 @@ fn create_coinbase(stamp: u64) -> Tx {
     let output = create_output(stamp * 1000);
     TxBuilder::new()
         .add_output(output)
-        .set_witness(Witness {
-            range_proofs: Vec::new(),
-            stamp,
-            extra: Vec::new(),
-        })
+        .set_witness(Witness::new(Vec::new(), stamp, Vec::new()))
         .build()
 }
 

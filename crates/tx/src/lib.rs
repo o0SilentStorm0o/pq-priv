@@ -1,5 +1,7 @@
 //! Transaction data structures and helpers.
 
+pub mod witness;
+
 use std::fmt;
 
 use blake3::Hasher;
@@ -9,6 +11,8 @@ use crypto::{
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+pub use witness::{Nullifier, SpendTag, compute_nullifier, compute_spend_tag};
 
 /// 32 byte transaction identifier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -139,21 +143,51 @@ pub struct Witness {
     /// Additional data (e.g., memos, metadata)
     #[serde(with = "serde_bytes")]
     pub extra: Vec<u8>,
+    /// TX v2: Nullifier for anonymous spending (prevents double-spend detection)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nullifier: Option<Nullifier>,
+    /// TX v2: Spend tag for wallet scanning
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spend_tag: Option<SpendTag>,
 }
 
 impl Witness {
-    /// Create a new witness with range proofs.
+    /// Create a new witness with range proofs (TX v1).
     pub fn new(range_proofs: Vec<RangeProof>, stamp: u64, extra: Vec<u8>) -> Self {
         Self {
             range_proofs,
             stamp,
             extra,
+            nullifier: None,
+            spend_tag: None,
+        }
+    }
+
+    /// Create a new witness for TX v2 with nullifier and spend tag.
+    pub fn new_v2(
+        range_proofs: Vec<RangeProof>,
+        stamp: u64,
+        extra: Vec<u8>,
+        nullifier: Nullifier,
+        spend_tag: SpendTag,
+    ) -> Self {
+        Self {
+            range_proofs,
+            stamp,
+            extra,
+            nullifier: Some(nullifier),
+            spend_tag: Some(spend_tag),
         }
     }
 
     /// Get the number of range proofs.
     pub fn proof_count(&self) -> usize {
         self.range_proofs.len()
+    }
+
+    /// Check if this witness contains TX v2 fields.
+    pub fn is_v2(&self) -> bool {
+        self.nullifier.is_some() && self.spend_tag.is_some()
     }
 }
 
@@ -169,13 +203,37 @@ pub struct Tx {
 
 impl Tx {
     pub fn new(inputs: Vec<Input>, outputs: Vec<Output>, witness: Witness) -> Self {
+        // Auto-detect version based on witness fields
+        let version = if witness.is_v2() { 2 } else { 1 };
+
         Self {
-            version: 1,
+            version,
             inputs,
             outputs,
             witness,
             locktime: 0,
         }
+    }
+
+    /// Create a transaction with explicit version.
+    pub fn with_version(
+        version: u16,
+        inputs: Vec<Input>,
+        outputs: Vec<Output>,
+        witness: Witness,
+    ) -> Self {
+        Self {
+            version,
+            inputs,
+            outputs,
+            witness,
+            locktime: 0,
+        }
+    }
+
+    /// Check if transaction uses version 2 (STARK privacy).
+    pub fn is_v2(&self) -> bool {
+        self.version == 2
     }
 
     /// Compute the transaction identifier (without witness data).
@@ -293,6 +351,16 @@ pub enum TxError {
     UnbalancedCommitments,
     #[error("too many range proofs: {got}, max allowed: {max}")]
     TooManyProofs { got: usize, max: usize },
+    #[error(
+        "TX version {version} not supported (node does not have consensus.features.stark enabled)"
+    )]
+    UnsupportedVersion { version: u16 },
+    #[error("TX v2 requires nullifier field")]
+    MissingNullifier,
+    #[error("TX v2 requires spend_tag field")]
+    MissingSpendTag,
+    #[error("TX v1 cannot have nullifier or spend_tag")]
+    V1WithV2Fields,
 }
 
 /// Compute the binding hash over outputs and witness data.
@@ -455,5 +523,78 @@ mod tests {
 
         // The helper draws a fresh random nonce per call, so link tags differ and double-spend detection cannot rely on them.
         assert_ne!(first.ann_link_tag, second.ann_link_tag);
+    }
+
+    // --- TX Version 2 Tests ---
+
+    #[test]
+    fn test_tx_v1_creates_without_nullifier() {
+        let witness = Witness::new(vec![], 0, vec![]);
+        assert!(!witness.is_v2());
+        assert!(witness.nullifier.is_none());
+        assert!(witness.spend_tag.is_none());
+
+        let tx = Tx::new(vec![], vec![], witness);
+        assert_eq!(tx.version, 1);
+        assert!(!tx.is_v2());
+    }
+
+    #[test]
+    fn test_tx_v2_creates_with_nullifier() {
+        let nullifier = Nullifier::new([1u8; 32]);
+        let spend_tag = SpendTag::new([2u8; 32]);
+        let witness = Witness::new_v2(vec![], 0, vec![], nullifier, spend_tag);
+
+        assert!(witness.is_v2());
+        assert_eq!(witness.nullifier, Some(nullifier));
+        assert_eq!(witness.spend_tag, Some(spend_tag));
+
+        let tx = Tx::new(vec![], vec![], witness);
+        assert_eq!(tx.version, 2);
+        assert!(tx.is_v2());
+    }
+
+    #[test]
+    fn test_tx_v2_roundtrip_cbor() {
+        let nullifier = Nullifier::new([42u8; 32]);
+        let spend_tag = SpendTag::new([99u8; 32]);
+        let witness = Witness::new_v2(vec![], 12345, vec![0xAA, 0xBB], nullifier, spend_tag);
+        let tx = Tx::new(vec![], vec![], witness);
+
+        // Serialize to CBOR
+        let encoded = codec::to_vec_cbor(&tx).expect("encode tx");
+
+        // Deserialize back
+        let decoded: Tx = codec::from_slice_cbor(&encoded).expect("decode tx");
+
+        assert_eq!(tx.version, decoded.version);
+        assert_eq!(tx.version, 2);
+        assert_eq!(tx.witness.nullifier, decoded.witness.nullifier);
+        assert_eq!(tx.witness.spend_tag, decoded.witness.spend_tag);
+        assert_eq!(tx.witness.stamp, decoded.witness.stamp);
+        assert_eq!(tx.witness.extra, decoded.witness.extra);
+    }
+
+    #[test]
+    fn test_tx_v1_roundtrip_cbor_backwards_compat() {
+        let witness = Witness::new(vec![], 54321, vec![0xCC]);
+        let tx = Tx::new(vec![], vec![], witness);
+
+        let encoded = codec::to_vec_cbor(&tx).expect("encode tx v1");
+        let decoded: Tx = codec::from_slice_cbor(&encoded).expect("decode tx v1");
+
+        assert_eq!(tx.version, 1);
+        assert_eq!(decoded.version, 1);
+        assert!(decoded.witness.nullifier.is_none());
+        assert!(decoded.witness.spend_tag.is_none());
+    }
+
+    #[test]
+    fn test_explicit_version_override() {
+        let witness = Witness::new(vec![], 0, vec![]);
+        let tx = Tx::with_version(99, vec![], vec![], witness);
+
+        assert_eq!(tx.version, 99);
+        assert!(!tx.is_v2()); // Only version 2 returns true
     }
 }
