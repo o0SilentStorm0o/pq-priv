@@ -46,3 +46,7 @@ criterion = { version = "0.5", features = ["html_reports"] }
 [[bench]]
 name = "crypto_verify"
 harness = false
+
+[[bench]]
+name = "range_proof_perf"
+harness = false
