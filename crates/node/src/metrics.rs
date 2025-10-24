@@ -369,6 +369,174 @@ impl Default for PrivacyMetrics {
     }
 }
 
+/// STARK privacy metrics (Sprint 9 - TX v2).
+///
+/// Tracks nullifier set size, STARK proof verification performance,
+/// and TX v2 adoption rate.
+#[derive(Clone)]
+pub struct StarkMetrics {
+    /// Current nullifier set size (gauge).
+    nullifier_set_size: Arc<Mutex<u64>>,
+    /// STARK proof verification latency histogram (milliseconds).
+    /// Buckets: [10, 50, 100, 500, 1000, 5000, 10000, +Inf] ms
+    verify_latency_buckets: Arc<Mutex<[u64; 8]>>,
+    /// Total TX v2 (STARK) transactions processed (counter).
+    tx_v2_count_total: Arc<Mutex<u64>>,
+    /// Total TX v1 (non-STARK) transactions processed (counter).
+    tx_v1_count_total: Arc<Mutex<u64>>,
+    /// Total invalid STARK proofs rejected (counter).
+    invalid_proofs_total: Arc<Mutex<u64>>,
+    /// Total nullifier collisions detected (counter).
+    nullifier_collisions_total: Arc<Mutex<u64>>,
+}
+
+impl StarkMetrics {
+    pub fn new() -> Self {
+        Self {
+            nullifier_set_size: Arc::new(Mutex::new(0)),
+            verify_latency_buckets: Arc::new(Mutex::new([0; 8])),
+            tx_v2_count_total: Arc::new(Mutex::new(0)),
+            tx_v1_count_total: Arc::new(Mutex::new(0)),
+            invalid_proofs_total: Arc::new(Mutex::new(0)),
+            nullifier_collisions_total: Arc::new(Mutex::new(0)),
+        }
+    }
+
+    /// Update nullifier set size gauge.
+    pub fn set_nullifier_set_size(&self, size: u64) {
+        *self.nullifier_set_size.lock() = size;
+    }
+
+    /// Record a successful STARK proof verification with duration.
+    ///
+    /// # Arguments
+    /// * `duration_ms` - Verification duration in milliseconds
+    pub fn record_verify_success(&self, duration_ms: u64) {
+        *self.tx_v2_count_total.lock() += 1;
+
+        // Bucket boundaries: [10, 50, 100, 500, 1000, 5000, 10000, +Inf]
+        let mut buckets = self.verify_latency_buckets.lock();
+        let bucket_idx = match duration_ms {
+            0..=10 => 0,
+            11..=50 => 1,
+            51..=100 => 2,
+            101..=500 => 3,
+            501..=1000 => 4,
+            1001..=5000 => 5,
+            5001..=10000 => 6,
+            _ => 7, // +Inf
+        };
+        buckets[bucket_idx] += 1;
+    }
+
+    /// Record a TX v1 (non-STARK) transaction.
+    pub fn record_tx_v1(&self) {
+        *self.tx_v1_count_total.lock() += 1;
+    }
+
+    /// Record an invalid STARK proof rejection.
+    pub fn record_invalid_proof(&self) {
+        *self.invalid_proofs_total.lock() += 1;
+    }
+
+    /// Record a nullifier collision (double-spend attempt).
+    pub fn record_nullifier_collision(&self) {
+        *self.nullifier_collisions_total.lock() += 1;
+    }
+
+    /// Generate Prometheus exposition format output.
+    pub fn to_prometheus(&self) -> String {
+        let mut output = String::new();
+
+        // Nullifier set size gauge
+        let nullifier_size = *self.nullifier_set_size.lock();
+        output
+            .push_str("# HELP pqpriv_nullifier_set_size Current number of nullifiers in the set\n");
+        output.push_str("# TYPE pqpriv_nullifier_set_size gauge\n");
+        output.push_str(&format!("pqpriv_nullifier_set_size {}\n", nullifier_size));
+
+        // STARK proof verification histogram
+        let buckets = *self.verify_latency_buckets.lock();
+        let count: u64 = buckets.iter().sum();
+
+        output.push_str(
+            "# HELP pqpriv_stark_verify_ms STARK proof verification duration in milliseconds\n",
+        );
+        output.push_str("# TYPE pqpriv_stark_verify_ms histogram\n");
+
+        let bucket_bounds = [10.0, 50.0, 100.0, 500.0, 1000.0, 5000.0, 10000.0];
+        let mut cumulative = 0u64;
+
+        for (i, &bound) in bucket_bounds.iter().enumerate() {
+            cumulative += buckets[i];
+            output.push_str(&format!(
+                "pqpriv_stark_verify_ms_bucket{{le=\"{}\"}} {}\n",
+                bound, cumulative
+            ));
+        }
+
+        // +inf bucket
+        cumulative += buckets[7];
+        output.push_str(&format!(
+            "pqpriv_stark_verify_ms_bucket{{le=\"+Inf\"}} {}\n",
+            cumulative
+        ));
+
+        output.push_str(&format!("pqpriv_stark_verify_ms_count {}\n", count));
+
+        // Calculate sum (approximate from bucket midpoints)
+        let sum_ms = (buckets[0] as f64 * 5.0)
+            + (buckets[1] as f64 * 30.0)
+            + (buckets[2] as f64 * 75.0)
+            + (buckets[3] as f64 * 300.0)
+            + (buckets[4] as f64 * 750.0)
+            + (buckets[5] as f64 * 3000.0)
+            + (buckets[6] as f64 * 7500.0)
+            + (buckets[7] as f64 * 15000.0);
+        output.push_str(&format!("pqpriv_stark_verify_ms_sum {:.2}\n", sum_ms));
+
+        // TX v2 counter
+        let tx_v2_count = *self.tx_v2_count_total.lock();
+        output.push_str("# HELP pqpriv_tx_v2_total Total number of TX v2 (STARK) transactions\n");
+        output.push_str("# TYPE pqpriv_tx_v2_total counter\n");
+        output.push_str(&format!("pqpriv_tx_v2_total {}\n", tx_v2_count));
+
+        // TX v1 counter
+        let tx_v1_count = *self.tx_v1_count_total.lock();
+        output
+            .push_str("# HELP pqpriv_tx_v1_total Total number of TX v1 (non-STARK) transactions\n");
+        output.push_str("# TYPE pqpriv_tx_v1_total counter\n");
+        output.push_str(&format!("pqpriv_tx_v1_total {}\n", tx_v1_count));
+
+        // Invalid proof counter
+        let invalid_count = *self.invalid_proofs_total.lock();
+        output.push_str(
+            "# HELP pqpriv_stark_invalid_total Number of invalid STARK proofs rejected\n",
+        );
+        output.push_str("# TYPE pqpriv_stark_invalid_total counter\n");
+        output.push_str(&format!("pqpriv_stark_invalid_total {}\n", invalid_count));
+
+        // Nullifier collision counter
+        let collision_count = *self.nullifier_collisions_total.lock();
+        output.push_str(
+            "# HELP pqpriv_nullifier_collisions_total Number of nullifier collisions detected\n",
+        );
+        output.push_str("# TYPE pqpriv_nullifier_collisions_total counter\n");
+        output.push_str(&format!(
+            "pqpriv_nullifier_collisions_total {}\n",
+            collision_count
+        ));
+
+        output
+    }
+}
+
+impl Default for StarkMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -500,5 +668,121 @@ mod tests {
             "# HELP pqpriv_range_proof_invalid_total Number of invalid range proofs rejected"
         ));
         assert!(output.contains("# HELP pqpriv_commitment_balance_fail_total Number of commitment balance verification failures"));
+    }
+
+    #[test]
+    fn test_stark_metrics_nullifier_set_size() {
+        let metrics = StarkMetrics::new();
+
+        metrics.set_nullifier_set_size(12345);
+
+        let output = metrics.to_prometheus();
+        assert!(output.contains("pqpriv_nullifier_set_size 12345"));
+        assert!(output.contains("# TYPE pqpriv_nullifier_set_size gauge"));
+    }
+
+    #[test]
+    fn test_stark_metrics_verify_success() {
+        let metrics = StarkMetrics::new();
+
+        // Record various verification durations
+        metrics.record_verify_success(5); // Bucket 0 (0-10ms)
+        metrics.record_verify_success(25); // Bucket 1 (11-50ms)
+        metrics.record_verify_success(75); // Bucket 2 (51-100ms)
+        metrics.record_verify_success(200); // Bucket 3 (101-500ms)
+
+        let output = metrics.to_prometheus();
+        assert!(output.contains("pqpriv_stark_verify_ms_count 4"));
+        assert!(output.contains("pqpriv_tx_v2_total 4"));
+        assert!(output.contains("# TYPE pqpriv_stark_verify_ms histogram"));
+    }
+
+    #[test]
+    fn test_stark_metrics_tx_counts() {
+        let metrics = StarkMetrics::new();
+
+        // Record TX v1 and v2
+        metrics.record_tx_v1();
+        metrics.record_tx_v1();
+        metrics.record_verify_success(50); // This also increments tx_v2_count
+        metrics.record_verify_success(100);
+
+        let output = metrics.to_prometheus();
+        assert!(output.contains("pqpriv_tx_v1_total 2"));
+        assert!(output.contains("pqpriv_tx_v2_total 2"));
+    }
+
+    #[test]
+    fn test_stark_metrics_invalid_proofs() {
+        let metrics = StarkMetrics::new();
+
+        metrics.record_invalid_proof();
+        metrics.record_invalid_proof();
+        metrics.record_invalid_proof();
+
+        let output = metrics.to_prometheus();
+        assert!(output.contains("pqpriv_stark_invalid_total 3"));
+        assert!(output.contains("# TYPE pqpriv_stark_invalid_total counter"));
+    }
+
+    #[test]
+    fn test_stark_metrics_nullifier_collisions() {
+        let metrics = StarkMetrics::new();
+
+        metrics.record_nullifier_collision();
+        metrics.record_nullifier_collision();
+
+        let output = metrics.to_prometheus();
+        assert!(output.contains("pqpriv_nullifier_collisions_total 2"));
+        assert!(output.contains("# TYPE pqpriv_nullifier_collisions_total counter"));
+    }
+
+    #[test]
+    fn test_stark_metrics_full_output() {
+        let metrics = StarkMetrics::new();
+
+        // Mixed scenario
+        metrics.set_nullifier_set_size(1000);
+        metrics.record_verify_success(10);
+        metrics.record_verify_success(500);
+        metrics.record_tx_v1();
+        metrics.record_invalid_proof();
+        metrics.record_nullifier_collision();
+
+        let output = metrics.to_prometheus();
+
+        // Verify all metric types are present
+        assert!(output.contains("# TYPE pqpriv_nullifier_set_size gauge"));
+        assert!(output.contains("# TYPE pqpriv_stark_verify_ms histogram"));
+        assert!(output.contains("# TYPE pqpriv_tx_v2_total counter"));
+        assert!(output.contains("# TYPE pqpriv_tx_v1_total counter"));
+        assert!(output.contains("# TYPE pqpriv_stark_invalid_total counter"));
+        assert!(output.contains("# TYPE pqpriv_nullifier_collisions_total counter"));
+
+        // Verify HELP text
+        assert!(
+            output.contains(
+                "# HELP pqpriv_nullifier_set_size Current number of nullifiers in the set"
+            )
+        );
+        assert!(output.contains(
+            "# HELP pqpriv_stark_verify_ms STARK proof verification duration in milliseconds"
+        ));
+        assert!(
+            output.contains("# HELP pqpriv_tx_v2_total Total number of TX v2 (STARK) transactions")
+        );
+        assert!(
+            output.contains(
+                "# HELP pqpriv_tx_v1_total Total number of TX v1 (non-STARK) transactions"
+            )
+        );
+        assert!(
+            output.contains(
+                "# HELP pqpriv_stark_invalid_total Number of invalid STARK proofs rejected"
+            )
+        );
+        assert!(output.contains(
+            "# HELP pqpriv_nullifier_collisions_total Number of nullifier collisions detected"
+        ));
     }
 }
