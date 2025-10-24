@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use consensus::Block;
-use crypto::{self, VerifyItem};
+use crypto::{self, VerifyItem, balance_commitments, get_max_proofs_per_block, verify_range};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tx::{self, Output, Tx};
@@ -58,6 +58,16 @@ pub enum UtxoError {
     InvalidSignature,
     #[error("storage backend error: {0}")]
     Backend(String),
+    #[error("confidential output missing range proof")]
+    MissingRangeProof,
+    #[error("confidential output has non-zero value (must be 0)")]
+    InvalidConfidentialValue,
+    #[error("invalid range proof")]
+    InvalidRangeProof,
+    #[error("commitment balance check failed (inflation detected)")]
+    UnbalancedCommitments,
+    #[error("too many range proofs: {got}, max allowed: {max}")]
+    TooManyProofs { got: usize, max: usize },
 }
 
 /// Backend interface used by the ledger applicator.
@@ -163,6 +173,10 @@ pub fn apply_block<B: UtxoBackend>(
 
     for (tx_index, tx) in block.txs.iter().enumerate() {
         let binding = tx::binding_hash(&tx.outputs, &tx.witness);
+        
+        // Validate confidential transaction rules (if any confidential outputs present)
+        validate_confidential_tx(store, tx)?;
+        
         if tx_index == 0 {
             if !tx.inputs.is_empty() {
                 return Err(UtxoError::InvalidCoinbase);
@@ -197,6 +211,85 @@ pub fn apply_block<B: UtxoBackend>(
     }
 
     Ok(undo)
+}
+
+/// Validate confidential transaction privacy rules.
+///
+/// Checks:
+/// 1. Confidential outputs have value = 0
+/// 2. Each confidential output has a corresponding range proof
+/// 3. Range proofs are valid
+/// 4. Commitments balance (inputs - outputs = 0)
+/// 5. DoS protection: max proofs per transaction
+fn validate_confidential_tx<B: UtxoBackend>(
+    store: &B,
+    tx: &Tx,
+) -> Result<(), UtxoError> {
+    // Count confidential outputs and collect commitments
+    let mut confidential_outputs = Vec::new();
+    let mut output_commitments = Vec::new();
+
+    for (idx, output) in tx.outputs.iter().enumerate() {
+        if let Some(ref commitment) = output.commitment {
+            // Rule 1: Confidential output must have value = 0
+            if output.value != 0 {
+                return Err(UtxoError::InvalidConfidentialValue);
+            }
+            confidential_outputs.push(idx);
+            output_commitments.push(commitment.clone());
+        }
+    }
+
+    // If no confidential outputs, skip privacy checks
+    if confidential_outputs.is_empty() {
+        return Ok(());
+    }
+
+    // Rule 2: Check we have enough range proofs
+    if tx.witness.range_proofs.len() < confidential_outputs.len() {
+        return Err(UtxoError::MissingRangeProof);
+    }
+
+    // DoS protection: max proofs per transaction
+    let max_proofs = get_max_proofs_per_block();
+    if tx.witness.range_proofs.len() > max_proofs {
+        return Err(UtxoError::TooManyProofs {
+            got: tx.witness.range_proofs.len(),
+            max: max_proofs,
+        });
+    }
+
+    // Rule 3: Verify range proofs
+    for (i, &output_idx) in confidential_outputs.iter().enumerate() {
+        let output = &tx.outputs[output_idx];
+        let commitment = output.commitment.as_ref().unwrap(); // Safe: we checked above
+        let proof = &tx.witness.range_proofs[i];
+
+        if !verify_range(commitment, proof) {
+            return Err(UtxoError::InvalidRangeProof);
+        }
+    }
+
+    // Rule 4: Verify commitment balance (inflation check)
+    // Collect input commitments from UTXOs
+    let mut input_commitments = Vec::new();
+    for input in &tx.inputs {
+        let outpoint = OutPoint::new(input.prev_txid, input.prev_index);
+        if let Some(record) = store.get(&outpoint)? {
+            if let Some(ref commitment) = record.output.commitment {
+                input_commitments.push(commitment.clone());
+            }
+        }
+    }
+
+    // Only check balance if we have both input and output commitments
+    if !input_commitments.is_empty() || !output_commitments.is_empty() {
+        if !balance_commitments(&input_commitments, &output_commitments) {
+            return Err(UtxoError::UnbalancedCommitments);
+        }
+    }
+
+    Ok(())
 }
 
 fn consume_inputs<B: UtxoBackend>(
