@@ -56,7 +56,7 @@ fn sign_transaction_input_with_dilithium2() {
     let secret_key = SecretKey::from_bytes(sk_bytes);
 
     // Create a transaction output
-    let output = Output::new(vec![1, 2, 3, 4], [0u8; 32], OutputMeta::default());
+    let output = Output::new(vec![1, 2, 3, 4], 100, OutputMeta::default());
 
     // Calculate binding hash
     let witness = tx::Witness::default();
@@ -104,11 +104,11 @@ fn complete_transaction_workflow() {
     let sender_secret = SecretKey::from_bytes(sender_sk);
 
     // Create transaction outputs
-    let output1 = Output::new(receiver_pk.clone(), [1u8; 32], OutputMeta::default());
+    let output1 = Output::new(receiver_pk.clone(), 5000, OutputMeta::default());
 
     let output2 = Output::new(
         vec![0xFF; 64], // Change output
-        [2u8; 32],
+        3000,
         OutputMeta::default(),
     );
 
@@ -186,7 +186,7 @@ fn transaction_with_mixed_algorithms() {
     };
 
     // Create output
-    let output = Output::new(vec![1, 2, 3], [0u8; 32], OutputMeta::default());
+    let output = Output::new(vec![1, 2, 3], 1000, OutputMeta::default());
     let witness = tx::Witness::default();
     let _binding = binding_hash(std::slice::from_ref(&output), &witness);
 
@@ -221,7 +221,7 @@ fn transaction_serialization() {
     let secret = SecretKey::from_bytes(sk);
 
     // Build transaction
-    let output = Output::new(vec![0xAB, 0xCD], [3u8; 32], OutputMeta::default());
+    let output = Output::new(vec![0xAB, 0xCD], 2500, OutputMeta::default());
     let witness = tx::Witness::default();
     let binding = binding_hash(std::slice::from_ref(&output), &witness);
 
@@ -271,11 +271,7 @@ fn stress_test_multiple_transactions() {
         let public = PublicKey::from_bytes(pk);
         let secret = SecretKey::from_bytes(sk);
 
-        let output = Output::new(
-            vec![i as u8; 16],
-            [(i * 2) as u8; 32],
-            OutputMeta::default(),
-        );
+        let output = Output::new(vec![i as u8; 16], (i as u64) * 1000, OutputMeta::default());
 
         let witness = tx::Witness::default();
         let binding = binding_hash(std::slice::from_ref(&output), &witness);

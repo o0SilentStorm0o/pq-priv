@@ -20,6 +20,7 @@ use tx::{Tx, TxId};
 use utxo::{BlockUndo, OutPoint, UtxoBackend, UtxoError, apply_block, undo_block};
 
 use crate::mempool::{MempoolAddOutcome, TxPool};
+use crate::metrics::PrivacyMetrics;
 
 #[derive(Debug, Error)]
 pub enum ChainError {
@@ -80,6 +81,7 @@ pub struct ChainState {
     last_commit_ms: f64,
     events: broadcast::Sender<ChainEvent>,
     mempool: Option<Arc<Mutex<TxPool>>>,
+    privacy_metrics: Option<Arc<PrivacyMetrics>>,
 }
 
 impl ChainState {
@@ -108,6 +110,7 @@ impl ChainState {
             last_commit_ms: 0.0,
             events,
             mempool: None,
+            privacy_metrics: None,
         };
         state.initialize(genesis)?;
         Ok(state)
@@ -139,12 +142,16 @@ impl ChainState {
         self.mempool = Some(mempool);
     }
 
+    pub fn attach_privacy_metrics(&mut self, metrics: Arc<PrivacyMetrics>) {
+        self.privacy_metrics = Some(metrics);
+    }
+
     fn install_genesis(&mut self, genesis: Block) -> Result<(), ChainError> {
         self.store.reset_utxo()?;
         let mut batch = self.store.begin_block_batch()?;
         let undo = {
             let mut backend = batch.utxo_backend();
-            apply_block(&mut backend, &genesis, 0)?
+            apply_block(&mut backend, &genesis, 0, None::<fn(&str, u64)>)?
         };
         let hash = pow_hash(&genesis.header);
         let work = block_work(genesis.header.n_bits)?;
@@ -190,7 +197,7 @@ impl ChainState {
             } else {
                 Some(self.active_chain[height - 1])
             };
-            let undo = apply_block(&mut self.utxo, &block, height as u64)?;
+            let undo = apply_block(&mut self.utxo, &block, height as u64, None::<fn(&str, u64)>)?;
             let work = block_work(block.header.n_bits)?;
             let cumulative = if let Some(parent_hash) = parent {
                 self.index
@@ -296,7 +303,19 @@ impl ChainState {
         let start = Instant::now();
         let undo = {
             let mut backend = batch.utxo_backend();
-            apply_block(&mut backend, &block, height)?
+
+            // Create metrics callback if privacy metrics are attached
+            let metrics_fn = self.privacy_metrics.as_ref().map(|m| {
+                let metrics = Arc::clone(m);
+                move |event: &str, value: u64| match event {
+                    "verify_success" => metrics.record_verify_success(value),
+                    "invalid_proof" => metrics.record_invalid_proof(),
+                    "balance_failure" => metrics.record_balance_failure(),
+                    _ => {}
+                }
+            });
+
+            apply_block(&mut backend, &block, height, metrics_fn)?
         };
         let tip_info = TipInfo::new(height, hash, cumulative.clone(), self.reorg_count);
         batch.stage_block(height, &block)?;
@@ -641,7 +660,19 @@ impl ChainState {
                     .index
                     .get(hash)
                     .ok_or_else(|| ChainError::ReorgFailure("missing attach entry".into()))?;
-                let undo = apply_block(&mut backend, &entry.block, entry.height)?;
+
+                // Create metrics callback if privacy metrics are attached
+                let metrics_fn = self.privacy_metrics.as_ref().map(|m| {
+                    let metrics = Arc::clone(m);
+                    move |event: &str, value: u64| match event {
+                        "verify_success" => metrics.record_verify_success(value),
+                        "invalid_proof" => metrics.record_invalid_proof(),
+                        "balance_failure" => metrics.record_balance_failure(),
+                        _ => {}
+                    }
+                });
+
+                let undo = apply_block(&mut backend, &entry.block, entry.height, metrics_fn)?;
                 self.undo_cache.insert(*hash, undo);
                 if let Some(entry) = self.index.get_mut(hash) {
                     entry.active = true;
@@ -949,7 +980,7 @@ mod tests {
         let coinbase_txid = block1.txs[0].txid();
         chain.apply_block(block1).expect("apply block 1");
 
-        let spend_output = Output::new(vec![5, 6, 7], [9u8; 32], OutputMeta::default());
+        let spend_output = Output::new(vec![5, 6, 7], 9, OutputMeta::default());
         let witness = Witness {
             range_proofs: Vec::new(),
             stamp: base_time + 1,
@@ -1021,7 +1052,7 @@ mod tests {
                 &parent_spend.public,
                 b"parent",
             ),
-            crypto::commitment(25, b"parent"),
+            25,
             OutputMeta::default(),
         );
         let parent_witness = Witness {
@@ -1063,7 +1094,7 @@ mod tests {
                 &child_spend.public,
                 b"child",
             ),
-            crypto::commitment(10, b"child"),
+            10,
             OutputMeta::default(),
         );
         let child_witness = Witness {
@@ -1147,11 +1178,10 @@ mod tests {
         let scan = material.derive_scan_keypair(0);
         let spend = material.derive_spend_keypair(0);
         let stealth = build_stealth_blob(&scan.public, &spend.public, &seed.to_le_bytes());
-        let commitment = crypto::commitment(50, &seed.to_le_bytes());
         TxBuilder::new()
             .add_output(Output::new(
                 stealth,
-                commitment,
+                50,
                 OutputMeta {
                     deposit_flag: false,
                     deposit_id: None,
@@ -1187,9 +1217,8 @@ mod tests {
         let scan = material.derive_scan_keypair(0);
         let spend = material.derive_spend_keypair(0);
         let stealth = build_stealth_blob(&scan.public, &spend.public, &stamp.to_le_bytes());
-        let commitment = crypto::commitment(50, &stamp.to_le_bytes());
         TxBuilder::new()
-            .add_output(Output::new(stealth, commitment, OutputMeta::default()))
+            .add_output(Output::new(stealth, 50, OutputMeta::default()))
             .set_witness(Witness {
                 range_proofs: Vec::new(),
                 stamp,

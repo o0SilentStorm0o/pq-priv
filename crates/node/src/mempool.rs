@@ -492,7 +492,7 @@ mod tests {
     }
 
     fn sample_output() -> Output {
-        Output::new(vec![1, 2, 3], [0u8; 32], OutputMeta::default())
+        Output::new(vec![1, 2, 3], 100, OutputMeta::default())
     }
 
     fn sample_tx_with_fee(link_tag: [u8; 32], fee_sat: u64) -> Tx {

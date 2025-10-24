@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use consensus::Block;
-use crypto::{self, VerifyItem};
+use crypto::{self, VerifyItem, balance_commitments, get_max_proofs_per_block, verify_range};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tx::{self, Output, Tx};
@@ -58,6 +58,16 @@ pub enum UtxoError {
     InvalidSignature,
     #[error("storage backend error: {0}")]
     Backend(String),
+    #[error("confidential output missing range proof")]
+    MissingRangeProof,
+    #[error("confidential output has non-zero value (must be 0)")]
+    InvalidConfidentialValue,
+    #[error("invalid range proof")]
+    InvalidRangeProof,
+    #[error("commitment balance check failed (inflation detected)")]
+    UnbalancedCommitments,
+    #[error("too many range proofs: {got}, max allowed: {max}")]
+    TooManyProofs { got: usize, max: usize },
 }
 
 /// Backend interface used by the ledger applicator.
@@ -145,11 +155,19 @@ impl BlockUndo {
 }
 
 /// Apply a fully validated block to the UTXO set.
-pub fn apply_block<B: UtxoBackend>(
+///
+/// # Metrics
+/// Optional `metrics_fn` callback for recording privacy validation metrics.
+/// Called with ("verify_success", duration_ms), ("invalid_proof", 0), or ("balance_failure", 0).
+pub fn apply_block<B: UtxoBackend, F>(
     store: &mut B,
     block: &Block,
     height: u64,
-) -> Result<BlockUndo, UtxoError> {
+    metrics_fn: Option<F>,
+) -> Result<BlockUndo, UtxoError>
+where
+    F: FnMut(&str, u64) + Clone,
+{
     if block.txs.is_empty() {
         return Err(UtxoError::EmptyBlock);
     }
@@ -163,6 +181,10 @@ pub fn apply_block<B: UtxoBackend>(
 
     for (tx_index, tx) in block.txs.iter().enumerate() {
         let binding = tx::binding_hash(&tx.outputs, &tx.witness);
+
+        // Validate confidential transaction rules (if any confidential outputs present)
+        validate_confidential_tx(store, tx, metrics_fn.clone())?;
+
         if tx_index == 0 {
             if !tx.inputs.is_empty() {
                 return Err(UtxoError::InvalidCoinbase);
@@ -197,6 +219,110 @@ pub fn apply_block<B: UtxoBackend>(
     }
 
     Ok(undo)
+}
+
+/// Validate confidential transaction privacy rules.
+///
+/// Checks:
+/// 1. Confidential outputs have value = 0
+/// 2. Each confidential output has a corresponding range proof
+/// 3. Range proofs are valid
+/// 4. Commitments balance (inputs - outputs = 0)
+/// 5. DoS protection: max proofs per transaction
+///
+/// # Metrics
+/// If `record_metrics` callback is provided, it will be called with:
+/// - `("verify_success", duration_ms)` for each successful verification
+/// - `("invalid_proof", 0)` for each invalid proof
+/// - `("balance_failure", 0)` for commitment balance failures
+fn validate_confidential_tx<B: UtxoBackend, F>(
+    store: &B,
+    tx: &Tx,
+    mut record_metrics: Option<F>,
+) -> Result<(), UtxoError>
+where
+    F: FnMut(&str, u64),
+{
+    // Count confidential outputs and collect commitments
+    let mut confidential_outputs = Vec::new();
+    let mut output_commitments = Vec::new();
+
+    for (idx, output) in tx.outputs.iter().enumerate() {
+        if let Some(ref commitment) = output.commitment {
+            // Rule 1: Confidential output must have value = 0
+            if output.value != 0 {
+                return Err(UtxoError::InvalidConfidentialValue);
+            }
+            confidential_outputs.push(idx);
+            output_commitments.push(commitment.clone());
+        }
+    }
+
+    // If no confidential outputs, skip privacy checks
+    if confidential_outputs.is_empty() {
+        return Ok(());
+    }
+
+    // Rule 2: Check we have enough range proofs
+    if tx.witness.range_proofs.len() < confidential_outputs.len() {
+        return Err(UtxoError::MissingRangeProof);
+    }
+
+    // DoS protection: max proofs per transaction
+    let max_proofs = get_max_proofs_per_block();
+    if tx.witness.range_proofs.len() > max_proofs {
+        return Err(UtxoError::TooManyProofs {
+            got: tx.witness.range_proofs.len(),
+            max: max_proofs,
+        });
+    }
+
+    // Rule 3: Verify range proofs
+    for (i, &output_idx) in confidential_outputs.iter().enumerate() {
+        let output = &tx.outputs[output_idx];
+        let commitment = output.commitment.as_ref().unwrap(); // Safe: we checked above
+        let proof = &tx.witness.range_proofs[i];
+
+        // Measure verification latency
+        let start = std::time::Instant::now();
+        let valid = verify_range(commitment, proof);
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        if !valid {
+            if let Some(ref mut metrics_fn) = record_metrics {
+                metrics_fn("invalid_proof", 0);
+            }
+            return Err(UtxoError::InvalidRangeProof);
+        }
+
+        if let Some(ref mut metrics_fn) = record_metrics {
+            metrics_fn("verify_success", duration_ms);
+        }
+    }
+
+    // Rule 4: Verify commitment balance (inflation check)
+    // Collect input commitments from UTXOs
+    let mut input_commitments = Vec::new();
+    for input in &tx.inputs {
+        let outpoint = OutPoint::new(input.prev_txid, input.prev_index);
+        if let Some(record) = store.get(&outpoint)?
+            && let Some(ref commitment) = record.output.commitment
+        {
+            input_commitments.push(commitment.clone());
+        }
+    }
+
+    // Only check balance if we have both input and output commitments
+    if (!input_commitments.is_empty() || !output_commitments.is_empty())
+        && !balance_commitments(&input_commitments, &output_commitments)
+    {
+        if let Some(ref mut metrics_fn) = record_metrics {
+            metrics_fn("balance_failure", 0);
+        }
+        return Err(UtxoError::UnbalancedCommitments);
+    }
+
+    Ok(())
 }
 
 fn consume_inputs<B: UtxoBackend>(
@@ -362,11 +488,10 @@ mod tests {
         let scan = km.derive_scan_keypair(0);
         let spend = km.derive_spend_keypair(0);
         let stealth = tx::build_stealth_blob(&scan.public, &spend.public, &amount.to_le_bytes());
-        let commitment = crypto::commitment(amount, &amount.to_le_bytes());
         TxBuilder::new()
             .add_output(Output::new(
                 stealth,
-                commitment,
+                amount,
                 OutputMeta {
                     deposit_flag: false,
                     deposit_id: None,
@@ -391,7 +516,7 @@ mod tests {
     fn coinbase_adds_utxo() {
         let mut store = MemoryUtxoStore::new();
         let block = assemble_block(vec![coinbase(50)]);
-        let undo = apply_block(&mut store, &block, 1).expect("apply block");
+        let undo = apply_block(&mut store, &block, 1, None::<fn(&str, u64)>).expect("apply block");
         assert_eq!(store.utxo_count(), 1);
         assert!(undo.spent().is_empty());
     }
@@ -402,7 +527,7 @@ mod tests {
         let spend = KeyMaterial::random().derive_spend_keypair(0);
         let txid = [11u8; 32];
         let outpoint = OutPoint::new(txid, 0);
-        let output = tx::Output::new(vec![1], [2u8; 32], OutputMeta::default());
+        let output = tx::Output::new(vec![1], 1000u64, OutputMeta::default());
         let compact = store.allocate_compact_index().unwrap();
         store
             .insert(outpoint, OutputRecord::new(output, 0, compact))
@@ -415,7 +540,8 @@ mod tests {
             .add_input(input)
             .build();
         let block = assemble_block(vec![coinbase(25), tx]);
-        let err = apply_block(&mut store, &block, 2).expect_err("duplicate outpoint");
+        let err = apply_block(&mut store, &block, 2, None::<fn(&str, u64)>)
+            .expect_err("duplicate outpoint");
         assert_eq!(err, UtxoError::DuplicateOutPoint);
     }
 
@@ -425,7 +551,7 @@ mod tests {
         let spend = KeyMaterial::random().derive_spend_keypair(0);
         let txid = [22u8; 32];
         let outpoint = OutPoint::new(txid, 0);
-        let output = tx::Output::new(vec![2], [3u8; 32], OutputMeta::default());
+        let output = tx::Output::new(vec![2], 2000u64, OutputMeta::default());
         let compact = store.allocate_compact_index().unwrap();
         store
             .insert(outpoint, OutputRecord::new(output, 0, compact))
@@ -438,11 +564,17 @@ mod tests {
             &mut store,
             &assemble_block(vec![coinbase(1), spend.clone()]),
             2,
+            None::<fn(&str, u64)>,
         )
         .unwrap();
 
-        let err =
-            apply_block(&mut store, &assemble_block(vec![coinbase(1), spend]), 3).unwrap_err();
+        let err = apply_block(
+            &mut store,
+            &assemble_block(vec![coinbase(1), spend]),
+            3,
+            None::<fn(&str, u64)>,
+        )
+        .unwrap_err();
         assert_eq!(err, UtxoError::DuplicateLinkTag(spend_input.ann_link_tag));
     }
 
@@ -454,7 +586,7 @@ mod tests {
         let bogus = build_signed_input([9u8; 32], 0, &spend, vec![3], &binding);
         let spend = TxBuilder::new().add_input(bogus).build();
         let block = assemble_block(vec![coinbase(1), spend]);
-        let err = apply_block(&mut store, &block, 1).unwrap_err();
+        let err = apply_block(&mut store, &block, 1, None::<fn(&str, u64)>).unwrap_err();
         assert!(matches!(err, UtxoError::MissingOutPoint(_)));
     }
 
@@ -465,11 +597,10 @@ mod tests {
         let scan = material.derive_scan_keypair(0);
         let spend = material.derive_spend_keypair(0);
         let stealth = tx::build_stealth_blob(&scan.public, &spend.public, b"coinbase");
-        let commitment = crypto::commitment(50, b"coinbase");
         let coinbase_tx = TxBuilder::new()
             .add_output(Output::new(
                 stealth,
-                commitment,
+                5000u64,
                 OutputMeta {
                     deposit_flag: false,
                     deposit_id: None,
@@ -478,12 +609,13 @@ mod tests {
             .set_witness(Witness::default())
             .build();
         let coin_block = assemble_block(vec![coinbase_tx.clone()]);
-        let _ = apply_block(&mut store, &coin_block, 1).expect("apply coinbase");
+        let _ =
+            apply_block(&mut store, &coin_block, 1, None::<fn(&str, u64)>).expect("apply coinbase");
 
         let coin_out = OutPoint::new(*coinbase_tx.txid().as_bytes(), 0);
         assert!(store.get(&coin_out).unwrap().is_some());
 
-        let spend_output = Output::new(vec![9], [11u8; 32], OutputMeta::default());
+        let spend_output = Output::new(vec![9], 3000u64, OutputMeta::default());
         let witness = Witness::default();
         let binding = binding_hash(std::slice::from_ref(&spend_output), &witness);
         let spend_input = build_signed_input(
@@ -500,7 +632,7 @@ mod tests {
             .build();
         let block = assemble_block(vec![coinbase(1), spend_tx]);
 
-        let undo = apply_block(&mut store, &block, 2).expect("apply block");
+        let undo = apply_block(&mut store, &block, 2, None::<fn(&str, u64)>).expect("apply block");
         assert!(store.get(&coin_out).unwrap().is_none());
 
         undo_block(&mut store, &block, &undo).expect("undo block");

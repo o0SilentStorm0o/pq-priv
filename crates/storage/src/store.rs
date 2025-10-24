@@ -438,7 +438,7 @@ mod tests {
         let mut batch = store.begin_block_batch().unwrap();
         {
             let mut backend = batch.utxo_backend();
-            let _ = apply_block(&mut backend, &genesis, 0).unwrap();
+            let _ = apply_block(&mut backend, &genesis, 0, None::<fn(&str, u64)>).unwrap();
         }
         let hash = pow_hash(&genesis.header);
         batch.stage_block(0, &genesis).unwrap();
@@ -484,7 +484,7 @@ mod tests {
         let mut batch = store.begin_block_batch().unwrap();
         {
             let mut backend = batch.utxo_backend();
-            let _ = apply_block(&mut backend, block, height).unwrap();
+            let _ = apply_block(&mut backend, block, height, None::<fn(&str, u64)>).unwrap();
         }
         batch.stage_block(height, block).unwrap();
         let hash = pow_hash(&block.header);
@@ -531,11 +531,10 @@ mod tests {
         let scan = material.derive_scan_keypair(0);
         let spend = material.derive_spend_keypair(0);
         let stealth = build_stealth_blob(&scan.public, &spend.public, &seed.to_le_bytes());
-        let commitment = crypto::commitment(50, &seed.to_le_bytes());
         TxBuilder::new()
             .add_output(Output::new(
                 stealth,
-                commitment,
+                5000u64,
                 OutputMeta {
                     deposit_flag: false,
                     deposit_id: None,
@@ -558,10 +557,9 @@ mod tests {
         let scan = material.derive_scan_keypair(0);
         let spend = material.derive_spend_keypair(0);
         let stealth = build_stealth_blob(&scan.public, &spend.public, &seed.to_le_bytes());
-        let commitment = crypto::commitment(50, &seed.to_le_bytes());
         Output::new(
             stealth,
-            commitment,
+            5000u64,
             OutputMeta {
                 deposit_flag: false,
                 deposit_id: None,

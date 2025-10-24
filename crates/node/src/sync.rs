@@ -208,7 +208,7 @@ fn parent_known(state: &SyncState, chain: &ChainState, parent: &[u8; 32]) -> boo
 mod tests {
     use super::*;
     use consensus::{Block, BlockHeader, ChainParams, merkle_root};
-    use crypto::{KeyMaterial, commitment};
+    use crypto::KeyMaterial;
     use p2p::Inventory;
     use pow::mine_block;
     use std::thread;
@@ -237,11 +237,10 @@ mod tests {
         let scan = material.derive_scan_keypair(0);
         let spend = material.derive_spend_keypair(0);
         let stealth = build_stealth_blob(&scan.public, &spend.public, &seed.to_le_bytes());
-        let commitment = commitment(50, &seed.to_le_bytes());
         TxBuilder::new()
             .add_output(Output::new(
                 stealth,
-                commitment,
+                50,
                 OutputMeta {
                     deposit_flag: false,
                     deposit_id: None,

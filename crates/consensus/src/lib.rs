@@ -384,7 +384,7 @@ mod tests {
 
     #[test]
     fn merkle_root_matches_single_txid() {
-        let output = Output::new(vec![1, 2, 3], [5u8; 32], OutputMeta::default());
+        let output = Output::new(vec![1, 2, 3], 5000u64, OutputMeta::default());
         let tx = TxBuilder::new()
             .add_output(output)
             .set_witness(Witness::default())

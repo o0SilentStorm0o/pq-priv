@@ -21,7 +21,7 @@ use parking_lot::Mutex;
 use tx::{Tx, TxId};
 
 use crate::mempool::{MempoolAddOutcome, MempoolRejection, TxPool, TxPoolStats};
-use crate::metrics::StorageMetrics;
+use crate::metrics::{PrivacyMetrics, StorageMetrics};
 use crate::state::{ChainMetrics, ChainState};
 use p2p::NetworkHandle;
 
@@ -31,6 +31,7 @@ pub struct RpcContext {
     chain: Arc<Mutex<ChainState>>,
     network: Arc<Mutex<NetworkHandle>>,
     storage_metrics: Arc<StorageMetrics>,
+    privacy_metrics: Arc<PrivacyMetrics>,
 }
 
 impl RpcContext {
@@ -39,17 +40,23 @@ impl RpcContext {
         chain: Arc<Mutex<ChainState>>,
         network: NetworkHandle,
         storage_metrics: Arc<StorageMetrics>,
+        privacy_metrics: Arc<PrivacyMetrics>,
     ) -> Self {
         Self {
             mempool,
             chain,
             network: Arc::new(Mutex::new(network)),
             storage_metrics,
+            privacy_metrics,
         }
     }
 
     pub fn storage_metrics(&self) -> &StorageMetrics {
         &self.storage_metrics
+    }
+
+    pub fn privacy_metrics(&self) -> &PrivacyMetrics {
+        &self.privacy_metrics
     }
 
     fn chain_snapshot(&self) -> ChainSnapshot {
@@ -119,6 +126,9 @@ impl RpcContext {
 
         // Storage metrics from RocksDB (now updated with live DB stats)
         body.push_str(&self.storage_metrics.to_prometheus());
+
+        // Privacy metrics from confidential transaction validation
+        body.push_str(&self.privacy_metrics.to_prometheus());
 
         body
     }
@@ -302,8 +312,7 @@ fn build_coinbase_tx(material: &crypto::KeyMaterial, height: u64) -> tx::Tx {
     let scan = material.derive_scan_keypair(0);
     let spend = material.derive_spend_keypair(0);
     let stealth = build_stealth_blob(&scan.public, &spend.public, &height.to_le_bytes());
-    let commitment = crypto::commitment(50, &height.to_le_bytes());
-    let output = Output::new(stealth, commitment, OutputMeta::default());
+    let output = Output::new(stealth, 50, OutputMeta::default());
 
     TxBuilder::new()
         .add_output(output)
@@ -485,7 +494,7 @@ mod tests {
     use crate::mempool::{TxPool, TxPoolConfig};
     use crate::state::ChainState;
     use consensus::{Block, BlockHeader, ChainParams, merkle_root};
-    use crypto::{KeyMaterial, commitment};
+    use crypto::KeyMaterial;
     use p2p::{P2pConfig, Version, start_network};
     use parking_lot::Mutex;
     use pow::mine_block;
@@ -515,11 +524,10 @@ mod tests {
         let scan = material.derive_scan_keypair(0);
         let spend = material.derive_spend_keypair(0);
         let stealth = build_stealth_blob(&scan.public, &spend.public, &seed.to_le_bytes());
-        let commitment = commitment(50, &seed.to_le_bytes());
         TxBuilder::new()
             .add_output(Output::new(
                 stealth,
-                commitment,
+                50,
                 OutputMeta {
                     deposit_flag: false,
                     deposit_id: None,
@@ -549,7 +557,14 @@ mod tests {
         let version = Version::user_agent("test", 0);
         let network = start_network(config, version).await.expect("start network");
         let storage_metrics = Arc::new(StorageMetrics::new());
-        let ctx = Arc::new(RpcContext::new(mempool, chain, network, storage_metrics));
+        let privacy_metrics = Arc::new(PrivacyMetrics::new());
+        let ctx = Arc::new(RpcContext::new(
+            mempool,
+            chain,
+            network,
+            storage_metrics,
+            privacy_metrics,
+        ));
         let body = handle_metrics(State(ctx)).await;
         for metric in [
             "pqpriv_peers",

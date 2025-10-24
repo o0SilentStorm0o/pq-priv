@@ -10,7 +10,7 @@ pub mod tasks;
 
 pub use cfg::NodeConfig;
 pub use mempool::{TxPool, TxPoolConfig};
-pub use metrics::StorageMetrics;
+pub use metrics::{PrivacyMetrics, StorageMetrics};
 pub use relay::Relay;
 pub use rpc::{RpcContext, spawn_rpc_server};
 pub use state::{ChainError, ChainEvent, ChainState};
