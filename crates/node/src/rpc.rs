@@ -135,13 +135,19 @@ impl RpcContext {
 
     fn submit_transaction(&self, tx: Tx, bytes: Vec<u8>) -> Result<TxId, RpcError> {
         let candidate_txid = tx.txid();
-        let outcome = self
-            .mempool
-            .lock()
-            .accept_transaction(tx, Some(bytes), |txid, index| {
+        let outcome = self.mempool.lock().accept_transaction(
+            tx,
+            Some(bytes),
+            |txid, index| {
                 let guard = self.chain.lock();
                 guard.has_utxo(txid, index)
-            });
+            },
+            self.chain.lock().params().stark_enabled,
+            |nullifier| {
+                let guard = self.chain.lock();
+                guard.has_nullifier(nullifier)
+            },
+        );
         match outcome {
             MempoolAddOutcome::Accepted { txid } => {
                 self.broadcast_inv(txid);
@@ -481,6 +487,20 @@ fn map_rejection(reason: MempoolRejection) -> RpcError {
         MempoolRejection::CoinbaseForbidden => {
             RpcError::new(-26, "coinbase transactions not allowed")
         }
+        MempoolRejection::StarkNotEnabled => {
+            RpcError::new(-26, "TX v2 rejected: STARK privacy feature not enabled")
+        }
+        MempoolRejection::DuplicateNullifier(nullifier) => RpcError::new(
+            -26,
+            format!(
+                "duplicate nullifier (double-spend): {}",
+                hex::encode(nullifier)
+            ),
+        ),
+        MempoolRejection::InvalidAnonymitySetSize { actual } => RpcError::new(
+            -26,
+            format!("invalid anonymity set size: {} (expected 32-256)", actual),
+        ),
     }
 }
 

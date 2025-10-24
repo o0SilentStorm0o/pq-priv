@@ -317,6 +317,16 @@ impl ChainState {
 
             apply_block(&mut backend, &block, height, metrics_fn)?
         };
+
+        // Record nullifiers for TX v2 transactions (Sprint 9)
+        for tx in &block.txs {
+            if tx.is_v2()
+                && let Some(nullifier) = &tx.witness.nullifier
+            {
+                batch.record_nullifier(*nullifier.as_bytes())?;
+            }
+        }
+
         let tip_info = TipInfo::new(height, hash, cumulative.clone(), self.reorg_count);
         batch.stage_block(height, &block)?;
         batch.stage_tip(&tip_info)?;
@@ -388,6 +398,16 @@ impl ChainState {
         self.utxo
             .get(&outpoint)
             .map(|opt| opt.is_some())
+            .unwrap_or(false)
+    }
+
+    /// Check if a nullifier has been spent (exists in the nullifier index).
+    /// Used for double-spend prevention of TX v2 transactions.
+    pub fn has_nullifier(&self, nullifier: &[u8; 32]) -> bool {
+        self.store
+            .begin_block_batch()
+            .ok()
+            .and_then(|batch| batch.contains_nullifier(nullifier).ok())
             .unwrap_or(false)
     }
 
@@ -571,9 +591,13 @@ impl ChainState {
             if skip.contains(&txid) {
                 continue;
             }
-            let outcome = pool
-                .lock()
-                .accept_transaction(tx, None, |txid, index| self.has_utxo(txid, index));
+            let outcome = pool.lock().accept_transaction(
+                tx,
+                None,
+                |txid, index| self.has_utxo(txid, index),
+                self.params.stark_enabled,
+                |nullifier| self.has_nullifier(nullifier),
+            );
             match outcome {
                 MempoolAddOutcome::Accepted { txid } => {
                     debug!(%txid, "reintroduced transaction after reorg");
@@ -996,11 +1020,13 @@ mod tests {
             .set_witness(witness)
             .build();
 
-        let outcome = mempool
-            .lock()
-            .accept_transaction(spend_tx.clone(), None, |txid, index| {
-                chain.has_utxo(txid, index)
-            });
+        let outcome = mempool.lock().accept_transaction(
+            spend_tx.clone(),
+            None,
+            |txid, index| chain.has_utxo(txid, index),
+            chain.params().stark_enabled,
+            |nullifier| chain.has_nullifier(nullifier),
+        );
         assert!(matches!(outcome, MempoolAddOutcome::Accepted { .. }));
         assert!(mempool.lock().contains(&spend_tx.txid()));
 

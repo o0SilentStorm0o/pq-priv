@@ -197,13 +197,19 @@ impl Relay {
 
     fn admit_transaction(&self, tx: Tx, bytes: Vec<u8>) -> Result<TxId, MempoolRejection> {
         let txid = tx.txid();
-        let outcome = self
-            .mempool
-            .lock()
-            .accept_transaction(tx, Some(bytes), |txid, index| {
+        let outcome = self.mempool.lock().accept_transaction(
+            tx,
+            Some(bytes),
+            |txid, index| {
                 let chain = self.chain.lock();
                 chain.has_utxo(txid, index)
-            });
+            },
+            self.chain.lock().params().stark_enabled,
+            |nullifier| {
+                let chain = self.chain.lock();
+                chain.has_nullifier(nullifier)
+            },
+        );
         match outcome {
             MempoolAddOutcome::Accepted { txid } => Ok(txid),
             MempoolAddOutcome::Duplicate => Ok(txid),

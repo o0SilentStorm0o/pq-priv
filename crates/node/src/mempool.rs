@@ -11,11 +11,24 @@ use utxo::OutPoint;
 #[derive(Debug, Clone)]
 pub enum MempoolRejection {
     PoolFull,
-    FeeTooLow { required: u64, actual: u64 },
+    FeeTooLow {
+        required: u64,
+        actual: u64,
+    },
     DuplicateLinkTag([u8; 32]),
-    MissingInputs { missing: Vec<OutPoint> },
+    MissingInputs {
+        missing: Vec<OutPoint>,
+    },
     OrphanLimit,
     CoinbaseForbidden,
+    /// TX v2 used when STARK feature is disabled
+    StarkNotEnabled,
+    /// Nullifier already spent (double-spend attempt)
+    DuplicateNullifier([u8; 32]),
+    /// TX v2 anonymity set size out of allowed range (32-256)
+    InvalidAnonymitySetSize {
+        actual: usize,
+    },
 }
 
 /// Result of attempting to add a transaction to the mempool.
@@ -71,17 +84,44 @@ impl TxPool {
         }
     }
 
-    pub fn accept_transaction<F>(
+    pub fn accept_transaction<F, N>(
         &self,
         tx: Tx,
         bytes_hint: Option<Vec<u8>>,
         mut is_available: F,
+        stark_enabled: bool,
+        mut is_nullifier_spent: N,
     ) -> MempoolAddOutcome
     where
         F: FnMut(&[u8; 32], u32) -> bool,
+        N: FnMut(&[u8; 32]) -> bool,
     {
         if tx.inputs.is_empty() {
             return MempoolAddOutcome::Rejected(MempoolRejection::CoinbaseForbidden);
+        }
+
+        // TX v2 validation
+        if tx.is_v2() {
+            if !stark_enabled {
+                return MempoolAddOutcome::Rejected(MempoolRejection::StarkNotEnabled);
+            }
+
+            // Check for duplicate nullifiers (double-spend)
+            if let Some(nullifier) = &tx.witness.nullifier
+                && is_nullifier_spent(nullifier.as_bytes())
+            {
+                return MempoolAddOutcome::Rejected(MempoolRejection::DuplicateNullifier(
+                    *nullifier.as_bytes(),
+                ));
+            }
+
+            // Validate anonymity set size (placeholder for now - will be populated from STARK proof)
+            // For now, we just ensure witness fields are present for TX v2
+            if tx.witness.nullifier.is_none() {
+                return MempoolAddOutcome::Rejected(MempoolRejection::InvalidAnonymitySetSize {
+                    actual: 0,
+                });
+            }
         }
 
         let fee_sat = extract_fee_sat(&tx);
@@ -513,7 +553,7 @@ mod tests {
     fn rejects_coinbase_transactions() {
         let pool = pool_with_defaults();
         let tx = Tx::new(vec![], vec![sample_output()], Witness::default());
-        match pool.accept_transaction(tx, None, |_txid, _| true) {
+        match pool.accept_transaction(tx, None, |_txid, _| true, false, |_| false) {
             MempoolAddOutcome::Rejected(MempoolRejection::CoinbaseForbidden) => {}
             other => panic!("unexpected outcome: {other:?}"),
         }
@@ -523,11 +563,23 @@ mod tests {
     fn detects_duplicate_link_tags() {
         let pool = pool_with_defaults();
         let tx = sample_tx_with_fee([42u8; 32], 1_000);
-        let result = pool.accept_transaction(tx.clone(), None, |_txid, _| true);
+        let result = pool.accept_transaction(tx.clone(), None, |_txid, _| true, false, |_| false);
         assert!(matches!(result, MempoolAddOutcome::Accepted { .. }));
-        let mut conflicting = sample_tx_with_fee([42u8; 32], 1_000);
-        conflicting.inputs[0].prev_index = 1;
-        let result = pool.accept_transaction(conflicting, None, |_txid, _| true);
+
+        // Create a different TX with same link tag but different output value to get different TXID
+        let input = Input::new(
+            [2u8; 32], // Different prev_txid
+            0,
+            [42u8; 32], // Same link tag!
+            sample_public_key(),
+            vec![0x42],
+            sample_signature(),
+        );
+        let output = Output::new(vec![1, 2, 3], 200, OutputMeta::default()); // Different amount
+        let mut conflicting = Tx::new(vec![input], vec![output], Witness::default());
+        conflicting.witness.extra = 2_000u64.to_le_bytes().to_vec();
+
+        let result = pool.accept_transaction(conflicting, None, |_txid, _| true, false, |_| false);
         assert!(matches!(
             result,
             MempoolAddOutcome::Rejected(MempoolRejection::DuplicateLinkTag(_))
@@ -542,13 +594,13 @@ mod tests {
         };
         let pool = pool_with_config(config);
         let low_fee_tx = sample_tx_with_fee([10u8; 32], 1);
-        let result = pool.accept_transaction(low_fee_tx, None, |_txid, _| true);
+        let result = pool.accept_transaction(low_fee_tx, None, |_txid, _| true, false, |_| false);
         assert!(matches!(
             result,
             MempoolAddOutcome::Rejected(MempoolRejection::FeeTooLow { .. })
         ));
         let high_fee_tx = sample_tx_with_fee([11u8; 32], 100_000);
-        let result = pool.accept_transaction(high_fee_tx, None, |_txid, _| true);
+        let result = pool.accept_transaction(high_fee_tx, None, |_txid, _| true, false, |_| false);
         assert!(matches!(result, MempoolAddOutcome::Accepted { .. }));
     }
 
@@ -566,11 +618,17 @@ mod tests {
         };
         let pool = pool_with_config(config);
         assert!(matches!(
-            pool.accept_transaction(low_fee_tx, Some(low_encoded), |_txid, _| true),
+            pool.accept_transaction(
+                low_fee_tx,
+                Some(low_encoded),
+                |_txid, _| true,
+                false,
+                |_| false
+            ),
             MempoolAddOutcome::Accepted { .. }
         ));
         assert!(matches!(
-            pool.accept_transaction(high_fee_tx, None, |_txid, _| true),
+            pool.accept_transaction(high_fee_tx, None, |_txid, _| true, false, |_| false),
             MempoolAddOutcome::Accepted { .. }
         ));
         assert!(!pool.contains(&low_fee_id));
@@ -585,7 +643,7 @@ mod tests {
         };
         let pool = pool_with_config(config);
         let tx = sample_tx_with_fee([7u8; 32], 1_000);
-        let result = pool.accept_transaction(tx, None, |_txid, _| false);
+        let result = pool.accept_transaction(tx, None, |_txid, _| false, false, |_| false);
         match result {
             MempoolAddOutcome::StoredOrphan { missing } => {
                 assert_eq!(missing.len(), 1);
@@ -594,5 +652,118 @@ mod tests {
         }
         thread::sleep(Duration::from_millis(20));
         assert_eq!(pool.stats().orphan_count, 0);
+    }
+
+    #[test]
+    fn rejects_tx_v2_when_stark_disabled() {
+        use tx::{Nullifier, SpendTag};
+
+        let pool = pool_with_defaults();
+        let output = sample_output();
+        let witness = Witness {
+            range_proofs: Vec::new(),
+            stamp: 1000,
+            extra: vec![],
+            nullifier: Some(Nullifier::new([1u8; 32])),
+            spend_tag: Some(SpendTag::new([2u8; 32])),
+        };
+        let input = Input::new(
+            [1u8; 32],
+            0,
+            [10u8; 32],
+            sample_public_key(),
+            vec![0x42],
+            sample_signature(),
+        );
+        let tx_v2 = Tx::with_version(2, vec![input], vec![output], witness);
+
+        let result = pool.accept_transaction(tx_v2, None, |_, _| true, false, |_| false);
+        assert!(matches!(
+            result,
+            MempoolAddOutcome::Rejected(MempoolRejection::StarkNotEnabled)
+        ));
+    }
+
+    #[test]
+    fn accepts_tx_v2_when_stark_enabled() {
+        use tx::{Nullifier, SpendTag};
+
+        let pool = pool_with_defaults();
+        let output = sample_output();
+        let witness = Witness {
+            range_proofs: Vec::new(),
+            stamp: 1000,
+            extra: 1_000u64.to_le_bytes().to_vec(),
+            nullifier: Some(Nullifier::new([1u8; 32])),
+            spend_tag: Some(SpendTag::new([2u8; 32])),
+        };
+        let input = Input::new(
+            [1u8; 32],
+            0,
+            [10u8; 32],
+            sample_public_key(),
+            vec![0x42],
+            sample_signature(),
+        );
+        let tx_v2 = Tx::with_version(2, vec![input], vec![output], witness);
+
+        let result = pool.accept_transaction(tx_v2, None, |_, _| true, true, |_| false);
+        assert!(matches!(result, MempoolAddOutcome::Accepted { .. }));
+    }
+
+    #[test]
+    fn rejects_duplicate_nullifier() {
+        use tx::{Nullifier, SpendTag};
+
+        let pool = pool_with_defaults();
+        let nullifier = [42u8; 32];
+
+        // First TX should be accepted
+        let output1 = sample_output();
+        let witness1 = Witness {
+            range_proofs: Vec::new(),
+            stamp: 1000,
+            extra: 1_000u64.to_le_bytes().to_vec(),
+            nullifier: Some(Nullifier::new(nullifier)),
+            spend_tag: Some(SpendTag::new([1u8; 32])),
+        };
+        let input1 = Input::new(
+            [1u8; 32],
+            0,
+            [10u8; 32],
+            sample_public_key(),
+            vec![0x42],
+            sample_signature(),
+        );
+        let tx1 = Tx::with_version(2, vec![input1], vec![output1], witness1);
+
+        let result1 = pool.accept_transaction(tx1, None, |_, _| true, true, |_| false);
+        assert!(matches!(result1, MempoolAddOutcome::Accepted { .. }));
+
+        // Second TX with same nullifier should be rejected
+        let output2 = sample_output();
+        let witness2 = Witness {
+            range_proofs: Vec::new(),
+            stamp: 1001,
+            extra: 2_000u64.to_le_bytes().to_vec(),
+            nullifier: Some(Nullifier::new(nullifier)),
+            spend_tag: Some(SpendTag::new([2u8; 32])),
+        };
+        let input2 = Input::new(
+            [2u8; 32],
+            0,
+            [20u8; 32],
+            sample_public_key(),
+            vec![0x43],
+            sample_signature(),
+        );
+        let tx2 = Tx::with_version(2, vec![input2], vec![output2], witness2);
+
+        // Simulate nullifier already spent in chain
+        let result2 = pool.accept_transaction(tx2, None, |_, _| true, true, |n| n == &nullifier);
+        assert!(matches!(
+            result2,
+            MempoolAddOutcome::Rejected(MempoolRejection::DuplicateNullifier(_))
+        ));
     }
 }

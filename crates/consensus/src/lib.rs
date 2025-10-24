@@ -102,6 +102,9 @@ pub struct ChainParams {
     pub target_spacing: u64,
     pub window: usize,
     pub pow_limit: [u8; 32],
+    /// Whether STARK-based privacy transactions (TX v2) are enabled on this chain.
+    /// When false, only TX v1 (transparent) transactions are accepted.
+    pub stark_enabled: bool,
 }
 
 impl Default for ChainParams {
@@ -113,6 +116,7 @@ impl Default for ChainParams {
             target_spacing: 60,
             window: 60,
             pow_limit,
+            stark_enabled: false, // Disabled by default for backwards compatibility
         }
     }
 }
