@@ -93,17 +93,17 @@ fn create_signed_input(
 }
 
 /// Create a simple output for testing
-fn create_output(value_commitment: [u8; 32]) -> Output {
+fn create_output(value: u64) -> Output {
     Output::new(
         vec![0xAA; 64], // stealth_blob
-        value_commitment,
+        value,
         OutputMeta::default(),
     )
 }
 
 /// Create a coinbase transaction
 fn create_coinbase(stamp: u64) -> Tx {
-    let output = create_output([stamp as u8; 32]);
+    let output = create_output(stamp * 1000);
     TxBuilder::new()
         .add_output(output)
         .set_witness(Witness {
@@ -148,7 +148,7 @@ fn block_with_many_transactions_uses_batch_verify() {
     for (i, (_public, _)) in keypairs.iter().enumerate() {
         let txid = [i as u8; 32];
         let outpoint = OutPoint::new(txid, 0);
-        let output = create_output([i as u8; 32]);
+        let output = create_output(i as u64 * 1000);
         let record = OutputRecord::new(output, 0, i as u64);
 
         backend.insert(outpoint, record).expect("insert");
@@ -161,7 +161,7 @@ fn block_with_many_transactions_uses_batch_verify() {
         let outpoint = OutPoint::new([i as u8; 32], 0);
 
         // Create transaction output
-        let output = create_output([(i + 100) as u8; 32]);
+        let output = create_output((i + 100) as u64 * 1000);
         let witness = Witness::default();
         let binding = binding_hash(std::slice::from_ref(&output), &witness);
 
@@ -186,7 +186,7 @@ fn block_with_many_transactions_uses_batch_verify() {
     let items_before = crypto::get_batch_verify_items_total();
 
     // Apply block (validates all transactions)
-    let result = apply_block(&mut backend, &block, 1);
+    let result = apply_block(&mut backend, &block, 1, None::<fn(&str, u64)>);
     assert!(
         result.is_ok(),
         "Block with 50 valid transactions should apply successfully"
@@ -230,14 +230,20 @@ fn block_with_one_invalid_signature_is_rejected() {
     let outpoint2 = OutPoint::new([20; 32], 0);
 
     backend
-        .insert(outpoint1, OutputRecord::new(create_output([1; 32]), 0, 0))
+        .insert(
+            outpoint1,
+            OutputRecord::new(create_output(1000), 0, 0),
+        )
         .unwrap();
     backend
-        .insert(outpoint2, OutputRecord::new(create_output([2; 32]), 0, 1))
+        .insert(
+            outpoint2,
+            OutputRecord::new(create_output(2000), 0, 1),
+        )
         .unwrap();
 
     // Create transaction with 2 inputs
-    let output = create_output([99; 32]);
+    let output = create_output(99u64 * 1000);
     let witness = Witness::default();
     let binding = binding_hash(std::slice::from_ref(&output), &witness);
 
@@ -274,7 +280,7 @@ fn block_with_one_invalid_signature_is_rejected() {
     let invalid_before = crypto::get_batch_verify_invalid_total();
 
     // Attempt to apply block - should FAIL
-    let result = apply_block(&mut backend, &block, 1);
+    let result = apply_block(&mut backend, &block, 1, None::<fn(&str, u64)>);
 
     assert!(
         result.is_err(),
@@ -312,12 +318,12 @@ fn multi_input_transaction_uses_batch_path() {
 
     for (i, _) in keypairs.iter().enumerate() {
         let outpoint = OutPoint::new([i as u8; 32], 0);
-        let record = OutputRecord::new(create_output([i as u8; 32]), 0, i as u64);
+        let record = OutputRecord::new(create_output(i as u64 * 1000), 0, i as u64);
         backend.insert(outpoint, record).unwrap();
     }
 
     // Create transaction with 5 inputs (should trigger batch verify)
-    let output = create_output([200; 32]);
+    let output = create_output(200u64 * 1000);
     let witness = Witness::default();
     let binding = binding_hash(std::slice::from_ref(&output), &witness);
 
@@ -338,7 +344,7 @@ fn multi_input_transaction_uses_batch_path() {
     let items_before = crypto::get_batch_verify_items_total();
 
     // Apply block
-    let result = apply_block(&mut backend, &block, 1);
+    let result = apply_block(&mut backend, &block, 1, None::<fn(&str, u64)>);
     assert!(result.is_ok(), "multi-input transaction should validate");
 
     // Verify batch verify was used
@@ -384,12 +390,12 @@ fn large_batch_validates_correctly() {
         txid[0] = (i / 256) as u8;
         txid[1] = (i % 256) as u8;
         let outpoint = OutPoint::new(txid, 0);
-        let record = OutputRecord::new(create_output([i as u8; 32]), 0, i as u64);
+        let record = OutputRecord::new(create_output(i as u64 * 1000), 0, i as u64);
         backend.insert(outpoint, record).unwrap();
     }
 
     // Create transaction with 100 inputs
-    let output = create_output([255; 32]);
+    let output = create_output(255u64 * 1000);
     let witness = Witness::default();
     let binding = binding_hash(std::slice::from_ref(&output), &witness);
 
@@ -416,7 +422,7 @@ fn large_batch_validates_correctly() {
     let start = std::time::Instant::now();
 
     // Apply block
-    let result = apply_block(&mut backend, &block, 1);
+    let result = apply_block(&mut backend, &block, 1, None::<fn(&str, u64)>);
     assert!(result.is_ok(), "large batch should validate");
 
     let elapsed = start.elapsed();
@@ -458,12 +464,12 @@ fn mixed_validity_batch_detected() {
 
     for (i, _) in keypairs.iter().enumerate() {
         let outpoint = OutPoint::new([i as u8; 32], 0);
-        let record = OutputRecord::new(create_output([i as u8; 32]), 0, i as u64);
+        let record = OutputRecord::new(create_output(i as u64 * 1000), 0, i as u64);
         backend.insert(outpoint, record).unwrap();
     }
 
     // Create transaction with 10 inputs, but input #5 has INVALID signature
-    let output = create_output([123; 32]);
+    let output = create_output(123u64 * 1000);
     let witness = Witness::default();
     let binding = binding_hash(std::slice::from_ref(&output), &witness);
 
@@ -495,7 +501,7 @@ fn mixed_validity_batch_detected() {
     let block = create_test_block([0; 32], vec![create_coinbase(1000), tx], 1000);
 
     // Apply block - should FAIL due to 1 invalid signature
-    let result = apply_block(&mut backend, &block, 1);
+    let result = apply_block(&mut backend, &block, 1, None::<fn(&str, u64)>);
 
     assert!(
         result.is_err(),

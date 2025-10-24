@@ -8,7 +8,7 @@
 
 use consensus::{Block, BlockHeader, ChainParams};
 use crypto::{commit_value, prove_range};
-use tx::{Output, OutputMeta, Witness, TxBuilder};
+use tx::{Output, OutputMeta, TxBuilder, Witness};
 
 /// Helper to create a valid block header for testing.
 fn mock_block_header() -> BlockHeader {
@@ -66,7 +66,7 @@ fn test_valid_confidential_block() {
     let mut header = mock_block_header();
     let block = Block {
         header: header.clone(),
-        txs: vec![tx.clone()],
+        txs: (std::slice::from_ref(&tx)).to_vec(),
     };
 
     // Compute correct merkle root
@@ -111,11 +111,7 @@ fn test_invalid_range_proof_rejected() {
     let wrong_proof = prove_range(wrong_value, wrong_blinding).expect("proof should succeed");
 
     // Create output with commitment but wrong proof
-    let output = Output::new_confidential(
-        vec![0x03; 64],
-        commitment,
-        OutputMeta::default(),
-    );
+    let output = Output::new_confidential(vec![0x03; 64], commitment, OutputMeta::default());
 
     // Transaction with mismatched proof
     let witness = Witness::new(vec![wrong_proof], 99999u64, vec![]);
@@ -126,7 +122,7 @@ fn test_invalid_range_proof_rejected() {
 
     // Create block
     let mut header = mock_block_header();
-    header.merkle_root = consensus::merkle_root(&vec![tx.clone()]);
+    header.merkle_root = consensus::merkle_root(std::slice::from_ref(&tx));
     let block = Block {
         header,
         txs: vec![tx],
@@ -172,7 +168,7 @@ fn test_unbalanced_commitment_rejected() {
 
     // Create block
     let mut header = mock_block_header();
-    header.merkle_root = consensus::merkle_root(&vec![tx.clone()]);
+    header.merkle_root = consensus::merkle_root(std::slice::from_ref(&tx));
     let block = Block {
         header,
         txs: vec![tx],
@@ -208,11 +204,7 @@ fn test_missing_range_proof_rejected() {
     let blinding = b"missing_proof_test_blinding_32!!";
     let commitment = commit_value(value, blinding);
 
-    let output = Output::new_confidential(
-        vec![0x04; 64],
-        commitment,
-        OutputMeta::default(),
-    );
+    let output = Output::new_confidential(vec![0x04; 64], commitment, OutputMeta::default());
 
     // Witness with NO range proof (even though output is confidential)
     let witness = Witness::new(vec![], 22222u64, vec![]);
@@ -224,7 +216,7 @@ fn test_missing_range_proof_rejected() {
 
     // Create block
     let mut header = mock_block_header();
-    header.merkle_root = consensus::merkle_root(&vec![tx.clone()]);
+    header.merkle_root = consensus::merkle_root(std::slice::from_ref(&tx));
     let block = Block {
         header,
         txs: vec![tx],
@@ -283,7 +275,7 @@ fn test_dos_protection_max_proofs_per_block() {
 
     // Create block
     let mut header = mock_block_header();
-    header.merkle_root = consensus::merkle_root(&vec![tx.clone()]);
+    header.merkle_root = consensus::merkle_root(std::slice::from_ref(&tx));
     let block = Block {
         header,
         txs: vec![tx],
@@ -324,7 +316,7 @@ fn test_mixed_transparent_confidential_block() {
 
     // Create block
     let mut header = mock_block_header();
-    header.merkle_root = consensus::merkle_root(&vec![tx.clone()]);
+    header.merkle_root = consensus::merkle_root(std::slice::from_ref(&tx));
     let block = Block {
         header,
         txs: vec![tx],
@@ -376,7 +368,7 @@ fn test_confidential_output_with_nonzero_value_rejected() {
 
     // Create block
     let mut header = mock_block_header();
-    header.merkle_root = consensus::merkle_root(&vec![tx.clone()]);
+    header.merkle_root = consensus::merkle_root(std::slice::from_ref(&tx));
     let block = Block {
         header,
         txs: vec![tx],
@@ -427,10 +419,7 @@ fn test_multiple_confidential_outputs_in_block() {
     // Create block with 5 transactions
     let mut header = mock_block_header();
     header.merkle_root = consensus::merkle_root(&txs);
-    let block = Block {
-        header,
-        txs,
-    };
+    let block = Block { header, txs };
 
     // Apply block - will fail because each TX has unbalanced commitments
     // (confidential outputs with no inputs)

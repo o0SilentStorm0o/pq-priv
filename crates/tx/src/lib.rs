@@ -4,7 +4,9 @@ use std::fmt;
 
 use blake3::Hasher;
 use codec::to_vec_cbor;
-use crypto::{self, AlgTag, Commitment, PublicKey, RangeProof, Signature, SpendKeypair, compute_link_tag};
+use crypto::{
+    self, AlgTag, Commitment, PublicKey, RangeProof, Signature, SpendKeypair, compute_link_tag,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -300,7 +302,7 @@ pub fn binding_hash(outputs: &[Output], witness: &Witness) -> [u8; 32] {
     for output in outputs {
         hasher.update(&(output.stealth_blob.len() as u64).to_le_bytes());
         hasher.update(&output.stealth_blob);
-        
+
         // Hash value or commitment
         if let Some(ref commitment) = output.commitment {
             hasher.update(&[1u8]); // Confidential marker
@@ -309,7 +311,7 @@ pub fn binding_hash(outputs: &[Output], witness: &Witness) -> [u8; 32] {
             hasher.update(&[0u8]); // Transparent marker
             hasher.update(&output.value.to_le_bytes());
         }
-        
+
         hasher.update(&output.value_commitment); // Legacy field
         hasher.update(&[output.output_meta.deposit_flag as u8]);
         match &output.output_meta.deposit_id {
@@ -323,7 +325,7 @@ pub fn binding_hash(outputs: &[Output], witness: &Witness) -> [u8; 32] {
         }
     }
     hasher.update(&witness.stamp.to_le_bytes());
-    
+
     // Hash range proofs
     hasher.update(&(witness.range_proofs.len() as u64).to_le_bytes());
     for proof in &witness.range_proofs {
@@ -331,7 +333,7 @@ pub fn binding_hash(outputs: &[Output], witness: &Witness) -> [u8; 32] {
         hasher.update(&(proof_bytes.len() as u64).to_le_bytes());
         hasher.update(proof_bytes);
     }
-    
+
     hasher.update(&(witness.extra.len() as u64).to_le_bytes());
     hasher.update(&witness.extra);
     hasher.finalize().into()
@@ -429,16 +431,12 @@ mod tests {
         let scan = km.derive_scan_keypair(0);
         let spend = km.derive_spend_keypair(0);
         let stealth = build_stealth_blob(&scan.public, &spend.public, b"rnd");
-        let commitment = crypto::commitment(42, b"blind");
-        let output = Output::new(stealth, commitment, OutputMeta::default());
+        let value = 42u64;
+        let output = Output::new(stealth, value, OutputMeta::default());
         let tx1 = TxBuilder::new().add_output(output.clone()).build();
         let tx2 = TxBuilder::new()
             .add_output(output)
-            .add_output(Output::new(
-                vec![1, 2, 3],
-                commitment,
-                OutputMeta::default(),
-            ))
+            .add_output(Output::new(vec![1, 2, 3], 100u64, OutputMeta::default()))
             .build();
         assert_ne!(tx1.txid(), tx2.txid());
     }
@@ -448,7 +446,7 @@ mod tests {
         let km = KeyMaterial::random();
         let spend = km.derive_spend_keypair(0);
         let prev = [7u8; 32];
-        let outputs = vec![Output::new(vec![1], [0u8; 32], OutputMeta::default())];
+        let outputs = vec![Output::new(vec![1], 1000u64, OutputMeta::default())];
         let witness = Witness::default();
         let binding = binding_hash(&outputs, &witness);
 

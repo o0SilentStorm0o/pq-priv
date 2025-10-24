@@ -303,20 +303,18 @@ impl ChainState {
         let start = Instant::now();
         let undo = {
             let mut backend = batch.utxo_backend();
-            
+
             // Create metrics callback if privacy metrics are attached
             let metrics_fn = self.privacy_metrics.as_ref().map(|m| {
                 let metrics = Arc::clone(m);
-                move |event: &str, value: u64| {
-                    match event {
-                        "verify_success" => metrics.record_verify_success(value),
-                        "invalid_proof" => metrics.record_invalid_proof(),
-                        "balance_failure" => metrics.record_balance_failure(),
-                        _ => {}
-                    }
+                move |event: &str, value: u64| match event {
+                    "verify_success" => metrics.record_verify_success(value),
+                    "invalid_proof" => metrics.record_invalid_proof(),
+                    "balance_failure" => metrics.record_balance_failure(),
+                    _ => {}
                 }
             });
-            
+
             apply_block(&mut backend, &block, height, metrics_fn)?
         };
         let tip_info = TipInfo::new(height, hash, cumulative.clone(), self.reorg_count);
@@ -662,20 +660,18 @@ impl ChainState {
                     .index
                     .get(hash)
                     .ok_or_else(|| ChainError::ReorgFailure("missing attach entry".into()))?;
-                
+
                 // Create metrics callback if privacy metrics are attached
                 let metrics_fn = self.privacy_metrics.as_ref().map(|m| {
                     let metrics = Arc::clone(m);
-                    move |event: &str, value: u64| {
-                        match event {
-                            "verify_success" => metrics.record_verify_success(value),
-                            "invalid_proof" => metrics.record_invalid_proof(),
-                            "balance_failure" => metrics.record_balance_failure(),
-                            _ => {}
-                        }
+                    move |event: &str, value: u64| match event {
+                        "verify_success" => metrics.record_verify_success(value),
+                        "invalid_proof" => metrics.record_invalid_proof(),
+                        "balance_failure" => metrics.record_balance_failure(),
+                        _ => {}
                     }
                 });
-                
+
                 let undo = apply_block(&mut backend, &entry.block, entry.height, metrics_fn)?;
                 self.undo_cache.insert(*hash, undo);
                 if let Some(entry) = self.index.get_mut(hash) {

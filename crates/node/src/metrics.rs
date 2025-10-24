@@ -332,7 +332,10 @@ impl PrivacyMetrics {
             "# HELP pqpriv_range_proof_verify_count Total number of range proof verifications\n",
         );
         output.push_str("# TYPE pqpriv_range_proof_verify_count counter\n");
-        output.push_str(&format!("pqpriv_range_proof_verify_count {}\n", verify_count));
+        output.push_str(&format!(
+            "pqpriv_range_proof_verify_count {}\n",
+            verify_count
+        ));
 
         // Invalid proof counter
         let invalid_count = *self.invalid_proofs_total.lock();
@@ -486,9 +489,16 @@ mod tests {
         assert!(output.contains("# TYPE pqpriv_commitment_balance_fail_total counter"));
 
         // Verify HELP text
-        assert!(output.contains("# HELP pqpriv_range_proof_verify_ms Range proof verification duration"));
-        assert!(output.contains("# HELP pqpriv_range_proof_verify_count Total number of range proof verifications"));
-        assert!(output.contains("# HELP pqpriv_range_proof_invalid_total Number of invalid range proofs rejected"));
+        assert!(
+            output
+                .contains("# HELP pqpriv_range_proof_verify_ms Range proof verification duration")
+        );
+        assert!(output.contains(
+            "# HELP pqpriv_range_proof_verify_count Total number of range proof verifications"
+        ));
+        assert!(output.contains(
+            "# HELP pqpriv_range_proof_invalid_total Number of invalid range proofs rejected"
+        ));
         assert!(output.contains("# HELP pqpriv_commitment_balance_fail_total Number of commitment balance verification failures"));
     }
 }

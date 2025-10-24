@@ -9,8 +9,8 @@
 //! - Security properties (zeroization, DoS limits)
 
 use crypto::{
-    RangeProof, balance_commitments, commit_value, prove_range, verify_range, CryptoError,
-    get_max_proofs_per_block,
+    CryptoError, RangeProof, balance_commitments, commit_value, get_max_proofs_per_block,
+    prove_range, verify_range,
 };
 
 #[test]
@@ -50,7 +50,10 @@ fn test_valid_range_proof_generation_and_verification() {
     assert!(proof.proof_bytes.len() <= 32 * 1024); // MAX_PROOF_SIZE
 
     // Verify the proof
-    assert!(verify_range(&commitment, &proof), "valid proof should verify");
+    assert!(
+        verify_range(&commitment, &proof),
+        "valid proof should verify"
+    );
 }
 
 #[test]
@@ -62,7 +65,10 @@ fn test_zero_value_range_proof() {
     let commitment = commit_value(value, blinding);
     let proof = prove_range(value, blinding).expect("proof generation for 0 should succeed");
 
-    assert!(verify_range(&commitment, &proof), "zero value proof should verify");
+    assert!(
+        verify_range(&commitment, &proof),
+        "zero value proof should verify"
+    );
 }
 
 #[test]
@@ -72,9 +78,13 @@ fn test_max_value_range_proof() {
     let blinding = b"max_value_blinding_factor_32!!!!";
 
     let commitment = commit_value(value, blinding);
-    let proof = prove_range(value, blinding).expect("proof generation for max value should succeed");
+    let proof =
+        prove_range(value, blinding).expect("proof generation for max value should succeed");
 
-    assert!(verify_range(&commitment, &proof), "max value proof should verify");
+    assert!(
+        verify_range(&commitment, &proof),
+        "max value proof should verify"
+    );
 }
 
 #[test]
@@ -140,7 +150,8 @@ fn test_malformed_range_proof_garbage() {
     let blinding = b"test_blinding_factor_32bytes!!!!";
 
     let commitment = commit_value(value, blinding);
-    let garbage_proof = RangeProof::new(vec![0xAA; 256]).expect("garbage proof should be creatable");
+    let garbage_proof =
+        RangeProof::new(vec![0xAA; 256]).expect("garbage proof should be creatable");
 
     // Verification should fail gracefully
     assert!(
@@ -176,7 +187,7 @@ fn test_balance_commitments_valid_single() {
 
     // Same commitment as input and output should balance
     assert!(
-        balance_commitments(&[commitment.clone()], &[commitment.clone()]),
+        balance_commitments(std::slice::from_ref(&commitment), std::slice::from_ref(&commitment)),
         "identical input and output should balance"
     );
 }

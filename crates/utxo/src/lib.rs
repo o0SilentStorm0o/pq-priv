@@ -181,10 +181,10 @@ where
 
     for (tx_index, tx) in block.txs.iter().enumerate() {
         let binding = tx::binding_hash(&tx.outputs, &tx.witness);
-        
+
         // Validate confidential transaction rules (if any confidential outputs present)
         validate_confidential_tx(store, tx, metrics_fn.clone())?;
-        
+
         if tx_index == 0 {
             if !tx.inputs.is_empty() {
                 return Err(UtxoError::InvalidCoinbase);
@@ -305,21 +305,21 @@ where
     let mut input_commitments = Vec::new();
     for input in &tx.inputs {
         let outpoint = OutPoint::new(input.prev_txid, input.prev_index);
-        if let Some(record) = store.get(&outpoint)? {
-            if let Some(ref commitment) = record.output.commitment {
-                input_commitments.push(commitment.clone());
-            }
+        if let Some(record) = store.get(&outpoint)?
+            && let Some(ref commitment) = record.output.commitment
+        {
+            input_commitments.push(commitment.clone());
         }
     }
 
     // Only check balance if we have both input and output commitments
-    if !input_commitments.is_empty() || !output_commitments.is_empty() {
-        if !balance_commitments(&input_commitments, &output_commitments) {
-            if let Some(ref mut metrics_fn) = record_metrics {
-                metrics_fn("balance_failure", 0);
-            }
-            return Err(UtxoError::UnbalancedCommitments);
+    if (!input_commitments.is_empty() || !output_commitments.is_empty())
+        && !balance_commitments(&input_commitments, &output_commitments)
+    {
+        if let Some(ref mut metrics_fn) = record_metrics {
+            metrics_fn("balance_failure", 0);
         }
+        return Err(UtxoError::UnbalancedCommitments);
     }
 
     Ok(())
@@ -488,11 +488,10 @@ mod tests {
         let scan = km.derive_scan_keypair(0);
         let spend = km.derive_spend_keypair(0);
         let stealth = tx::build_stealth_blob(&scan.public, &spend.public, &amount.to_le_bytes());
-        let commitment = crypto::commitment(amount, &amount.to_le_bytes());
         TxBuilder::new()
             .add_output(Output::new(
                 stealth,
-                commitment,
+                amount,
                 OutputMeta {
                     deposit_flag: false,
                     deposit_id: None,
@@ -517,7 +516,7 @@ mod tests {
     fn coinbase_adds_utxo() {
         let mut store = MemoryUtxoStore::new();
         let block = assemble_block(vec![coinbase(50)]);
-        let undo = apply_block(&mut store, &block, 1).expect("apply block");
+        let undo = apply_block(&mut store, &block, 1, None::<fn(&str, u64)>).expect("apply block");
         assert_eq!(store.utxo_count(), 1);
         assert!(undo.spent().is_empty());
     }
@@ -528,7 +527,7 @@ mod tests {
         let spend = KeyMaterial::random().derive_spend_keypair(0);
         let txid = [11u8; 32];
         let outpoint = OutPoint::new(txid, 0);
-        let output = tx::Output::new(vec![1], [2u8; 32], OutputMeta::default());
+        let output = tx::Output::new(vec![1], 1000u64, OutputMeta::default());
         let compact = store.allocate_compact_index().unwrap();
         store
             .insert(outpoint, OutputRecord::new(output, 0, compact))
@@ -541,7 +540,8 @@ mod tests {
             .add_input(input)
             .build();
         let block = assemble_block(vec![coinbase(25), tx]);
-        let err = apply_block(&mut store, &block, 2).expect_err("duplicate outpoint");
+        let err = apply_block(&mut store, &block, 2, None::<fn(&str, u64)>)
+            .expect_err("duplicate outpoint");
         assert_eq!(err, UtxoError::DuplicateOutPoint);
     }
 
@@ -551,7 +551,7 @@ mod tests {
         let spend = KeyMaterial::random().derive_spend_keypair(0);
         let txid = [22u8; 32];
         let outpoint = OutPoint::new(txid, 0);
-        let output = tx::Output::new(vec![2], [3u8; 32], OutputMeta::default());
+        let output = tx::Output::new(vec![2], 2000u64, OutputMeta::default());
         let compact = store.allocate_compact_index().unwrap();
         store
             .insert(outpoint, OutputRecord::new(output, 0, compact))
@@ -564,11 +564,17 @@ mod tests {
             &mut store,
             &assemble_block(vec![coinbase(1), spend.clone()]),
             2,
+            None::<fn(&str, u64)>,
         )
         .unwrap();
 
-        let err =
-            apply_block(&mut store, &assemble_block(vec![coinbase(1), spend]), 3).unwrap_err();
+        let err = apply_block(
+            &mut store,
+            &assemble_block(vec![coinbase(1), spend]),
+            3,
+            None::<fn(&str, u64)>,
+        )
+        .unwrap_err();
         assert_eq!(err, UtxoError::DuplicateLinkTag(spend_input.ann_link_tag));
     }
 
@@ -580,7 +586,7 @@ mod tests {
         let bogus = build_signed_input([9u8; 32], 0, &spend, vec![3], &binding);
         let spend = TxBuilder::new().add_input(bogus).build();
         let block = assemble_block(vec![coinbase(1), spend]);
-        let err = apply_block(&mut store, &block, 1).unwrap_err();
+        let err = apply_block(&mut store, &block, 1, None::<fn(&str, u64)>).unwrap_err();
         assert!(matches!(err, UtxoError::MissingOutPoint(_)));
     }
 
@@ -591,11 +597,10 @@ mod tests {
         let scan = material.derive_scan_keypair(0);
         let spend = material.derive_spend_keypair(0);
         let stealth = tx::build_stealth_blob(&scan.public, &spend.public, b"coinbase");
-        let commitment = crypto::commitment(50, b"coinbase");
         let coinbase_tx = TxBuilder::new()
             .add_output(Output::new(
                 stealth,
-                commitment,
+                5000u64,
                 OutputMeta {
                     deposit_flag: false,
                     deposit_id: None,
@@ -604,12 +609,13 @@ mod tests {
             .set_witness(Witness::default())
             .build();
         let coin_block = assemble_block(vec![coinbase_tx.clone()]);
-        let _ = apply_block(&mut store, &coin_block, 1).expect("apply coinbase");
+        let _ =
+            apply_block(&mut store, &coin_block, 1, None::<fn(&str, u64)>).expect("apply coinbase");
 
         let coin_out = OutPoint::new(*coinbase_tx.txid().as_bytes(), 0);
         assert!(store.get(&coin_out).unwrap().is_some());
 
-        let spend_output = Output::new(vec![9], [11u8; 32], OutputMeta::default());
+        let spend_output = Output::new(vec![9], 3000u64, OutputMeta::default());
         let witness = Witness::default();
         let binding = binding_hash(std::slice::from_ref(&spend_output), &witness);
         let spend_input = build_signed_input(
@@ -626,7 +632,7 @@ mod tests {
             .build();
         let block = assemble_block(vec![coinbase(1), spend_tx]);
 
-        let undo = apply_block(&mut store, &block, 2).expect("apply block");
+        let undo = apply_block(&mut store, &block, 2, None::<fn(&str, u64)>).expect("apply block");
         assert!(store.get(&coin_out).unwrap().is_none());
 
         undo_block(&mut store, &block, &undo).expect("undo block");

@@ -14,9 +14,9 @@ use tracing::{error, info};
 use tx::{Output, OutputMeta, Tx, TxBuilder, Witness, build_stealth_blob};
 
 use node::{
-    ChainState, NodeConfig, PrivacyMetrics, Relay, RpcContext, StorageMetrics, SyncManager,
-    TxPool, run_block_sync_task, run_chain_event_loop, run_peer_event_loop,
-    run_storage_metrics_task, spawn_rpc_server,
+    ChainState, NodeConfig, PrivacyMetrics, Relay, RpcContext, StorageMetrics, SyncManager, TxPool,
+    run_block_sync_task, run_chain_event_loop, run_peer_event_loop, run_storage_metrics_task,
+    spawn_rpc_server,
 };
 use p2p::{NodeAddr, P2pConfig, Services, Version, start_network};
 
@@ -184,10 +184,10 @@ async fn run_node(args: RunArgs) -> anyhow::Result<()> {
 
     // Create storage metrics collector (shared between RPC and background task)
     let storage_metrics = Arc::new(StorageMetrics::new());
-    
+
     // Create privacy metrics collector (shared between ChainState and RPC)
     let privacy_metrics = Arc::new(PrivacyMetrics::new());
-    
+
     // Attach privacy metrics to ChainState for validation tracking
     {
         let mut guard = chain.lock();
@@ -257,7 +257,7 @@ fn coinbase_tx(height: u64) -> Tx {
     let scan = material.derive_scan_keypair(0);
     let spend = material.derive_spend_keypair(0);
     let stealth = build_stealth_blob(&scan.public, &spend.public, &height.to_le_bytes());
-    
+
     // Create a transparent output with 50 coins
     let output = Output::new(stealth, 50, OutputMeta::default());
 

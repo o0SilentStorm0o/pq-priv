@@ -3,8 +3,8 @@
 //! Tests the end-to-end flow of creating, serializing, and validating
 //! confidential transactions with Pedersen commitments and range proofs.
 
-use crypto::{commit_value, prove_range, verify_range, balance_commitments};
-use tx::{Output, OutputMeta, Witness, Tx, TxBuilder, binding_hash};
+use crypto::{balance_commitments, commit_value, prove_range, verify_range};
+use tx::{Output, OutputMeta, Tx, TxBuilder, Witness, binding_hash};
 
 #[test]
 fn test_create_confidential_output() {
@@ -64,11 +64,8 @@ fn test_mixed_tx_binding_hash() {
     let commitment_conf = commit_value(value_conf, blinding_conf);
     let proof_conf = prove_range(value_conf, blinding_conf).expect("proof should succeed");
 
-    let confidential_output = Output::new_confidential(
-        vec![0x03; 64],
-        commitment_conf,
-        OutputMeta::default(),
-    );
+    let confidential_output =
+        Output::new_confidential(vec![0x03; 64], commitment_conf, OutputMeta::default());
 
     // Create witness with range proof for confidential output
     let witness = Witness::new(
@@ -96,13 +93,16 @@ fn test_mixed_tx_binding_hash() {
 
     let hash3 = binding_hash(&outputs, &witness_modified);
 
-    assert_ne!(hash1, hash3, "binding hash should change when witness changes");
+    assert_ne!(
+        hash1, hash3,
+        "binding hash should change when witness changes"
+    );
 }
 
 #[test]
 fn test_witness_range_proofs() {
     // Test witness with multiple range proofs for multiple confidential outputs
-    let values = vec![10u64, 25u64, 50u64, 100u64];
+    let values = [10u64, 25u64, 50u64, 100u64];
     let blindings: Vec<&[u8; 32]> = vec![
         b"blinding_00_32bytes!!!!!!!!!!!!!",
         b"blinding_01_32bytes!!!!!!!!!!!!!",
@@ -141,7 +141,11 @@ fn test_witness_range_proofs() {
     );
 
     // Verify each proof still verifies when part of witness
-    for (i, (commitment, proof)) in commitments.iter().zip(witness.range_proofs.iter()).enumerate() {
+    for (i, (commitment, proof)) in commitments
+        .iter()
+        .zip(witness.range_proofs.iter())
+        .enumerate()
+    {
         assert!(
             verify_range(commitment, proof),
             "proof {} should still verify in witness",
@@ -153,7 +157,7 @@ fn test_witness_range_proofs() {
 #[test]
 fn test_confidential_serialization() {
     // Test CBOR serialization/deserialization of confidential transaction
-    use codec::{to_vec_cbor, from_slice_cbor};
+    use codec::{from_slice_cbor, to_vec_cbor};
 
     let value = 200u64;
     let blinding = b"serialization_test_blinding_32!!";
@@ -178,7 +182,10 @@ fn test_confidential_serialization() {
 
     // Verify roundtrip
     assert_eq!(output, decoded, "output should roundtrip correctly");
-    assert!(decoded.is_confidential(), "decoded output should be confidential");
+    assert!(
+        decoded.is_confidential(),
+        "decoded output should be confidential"
+    );
     assert_eq!(decoded.value, 0, "decoded confidential value should be 0");
 
     let decoded_commitment = decoded.commitment.as_ref().unwrap();
@@ -198,7 +205,10 @@ fn test_confidential_serialization() {
         from_slice_cbor(&witness_encoded).expect("witness deserialization should succeed");
 
     // Verify witness roundtrip
-    assert_eq!(witness, witness_decoded, "witness should roundtrip correctly");
+    assert_eq!(
+        witness, witness_decoded,
+        "witness should roundtrip correctly"
+    );
     assert_eq!(
         witness_decoded.proof_count(),
         1,
@@ -236,16 +246,10 @@ fn test_full_confidential_transaction() {
     let proof1 = prove_range(value1, blinding1).expect("proof 1 should succeed");
     let proof2 = prove_range(value2, blinding2).expect("proof 2 should succeed");
 
-    let output1 = Output::new_confidential(
-        vec![0x05; 64],
-        commitment1.clone(),
-        OutputMeta::default(),
-    );
-    let output2 = Output::new_confidential(
-        vec![0x06; 64],
-        commitment2.clone(),
-        OutputMeta::default(),
-    );
+    let output1 =
+        Output::new_confidential(vec![0x05; 64], commitment1.clone(), OutputMeta::default());
+    let output2 =
+        Output::new_confidential(vec![0x06; 64], commitment2.clone(), OutputMeta::default());
 
     // Create witness with both proofs (in order)
     let witness = Witness::new(vec![proof1, proof2], 11111u64, vec![]);
@@ -260,11 +264,7 @@ fn test_full_confidential_transaction() {
     // Verify transaction structure
     assert_eq!(tx.version, 1, "version should be 1");
     assert_eq!(tx.outputs.len(), 2, "should have 2 outputs");
-    assert_eq!(
-        tx.witness.proof_count(),
-        2,
-        "witness should have 2 proofs"
-    );
+    assert_eq!(tx.witness.proof_count(), 2, "witness should have 2 proofs");
 
     // Verify all outputs are confidential
     for (i, output) in tx.outputs.iter().enumerate() {
@@ -339,11 +339,7 @@ fn test_commitment_balance_in_transaction() {
 fn test_transparent_and_confidential_mixed() {
     // Test transaction with both transparent and confidential outputs
     let transparent_value = 30u64;
-    let transparent_output = Output::new(
-        vec![0x07; 64],
-        transparent_value,
-        OutputMeta::default(),
-    );
+    let transparent_output = Output::new(vec![0x07; 64], transparent_value, OutputMeta::default());
 
     let confidential_value = 70u64;
     let confidential_blinding = b"mixed_tx_blinding_32bytes!!!!!!!";
@@ -371,17 +367,20 @@ fn test_transparent_and_confidential_mixed() {
 
     // Verify mixed outputs
     assert_eq!(tx.outputs.len(), 2, "should have 2 outputs");
-    assert!(!tx.outputs[0].is_confidential(), "first should be transparent");
-    assert!(tx.outputs[1].is_confidential(), "second should be confidential");
+    assert!(
+        !tx.outputs[0].is_confidential(),
+        "first should be transparent"
+    );
+    assert!(
+        tx.outputs[1].is_confidential(),
+        "second should be confidential"
+    );
 
     assert_eq!(
         tx.outputs[0].value, transparent_value,
         "transparent value should be visible"
     );
-    assert_eq!(
-        tx.outputs[1].value, 0,
-        "confidential value should be 0"
-    );
+    assert_eq!(tx.outputs[1].value, 0, "confidential value should be 0");
 
     // Witness should have exactly 1 proof
     assert_eq!(
@@ -397,7 +396,7 @@ fn test_transparent_and_confidential_mixed() {
     );
 
     // Serialize and deserialize full transaction
-    use codec::{to_vec_cbor, from_slice_cbor};
+    use codec::{from_slice_cbor, to_vec_cbor};
     let encoded = to_vec_cbor(&tx).expect("tx serialization should succeed");
     let decoded: Tx = from_slice_cbor(&encoded).expect("tx deserialization should succeed");
 
@@ -409,7 +408,11 @@ fn test_witness_default() {
     // Test default witness creation
     let witness = Witness::default();
 
-    assert_eq!(witness.proof_count(), 0, "default witness should have 0 proofs");
+    assert_eq!(
+        witness.proof_count(),
+        0,
+        "default witness should have 0 proofs"
+    );
     assert_eq!(witness.stamp, 0, "default stamp should be 0");
     assert!(witness.extra.is_empty(), "default extra should be empty");
 }
@@ -417,7 +420,7 @@ fn test_witness_default() {
 #[test]
 fn test_output_meta_serialization() {
     // Test OutputMeta with deposit_id
-    use codec::{to_vec_cbor, from_slice_cbor};
+    use codec::{from_slice_cbor, to_vec_cbor};
 
     let meta = OutputMeta {
         deposit_flag: true,

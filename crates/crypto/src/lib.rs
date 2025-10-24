@@ -1828,16 +1828,16 @@ pub struct Confidential {
 /// ```
 pub fn commit_value(value: u64, blinding: &[u8; 32]) -> Commitment {
     let gens = PedersenGens::default();
-    
+
     // Convert blinding to scalar (zeroized automatically)
     let blind_scalar = NgScalar::from_bytes_mod_order(*blinding);
-    
+
     // Compute commitment: C = v·G + r·H
     let commit_point = gens.commit(NgScalar::from(value), blind_scalar);
-    
+
     // Compress to 32 bytes
     let value_commit = commit_point.compress().to_bytes();
-    
+
     Commitment::new(value_commit, *blinding)
 }
 
@@ -1870,13 +1870,13 @@ pub fn commit_value(value: u64, blinding: &[u8; 32]) -> Commitment {
 pub fn prove_range(value: u64, blinding: &[u8; 32]) -> Result<RangeProof, CryptoError> {
     let pc_gens = PedersenGens::default();
     let bp_gens = BulletproofGens::new(64, 1); // 64-bit range, 1 party
-    
+
     // Create transcript for Fiat-Shamir
     let mut transcript = Transcript::new(b"pq-priv-range-proof");
-    
+
     // Convert blinding to scalar
     let blind_scalar = NgScalar::from_bytes_mod_order(*blinding);
-    
+
     // Create the proof
     let (proof, _committed_value) = BulletproofRangeProof::prove_single(
         &bp_gens,
@@ -1887,10 +1887,10 @@ pub fn prove_range(value: u64, blinding: &[u8; 32]) -> Result<RangeProof, Crypto
         64, // 64-bit range (0 to 2^64-1)
     )
     .map_err(|_| CryptoError::ProofGenerationFailed)?;
-    
+
     // Serialize proof
     let proof_bytes = proof.to_bytes();
-    
+
     RangeProof::new(proof_bytes)
 }
 
@@ -1927,19 +1927,19 @@ pub fn prove_range(value: u64, blinding: &[u8; 32]) -> Result<RangeProof, Crypto
 pub fn verify_range(commitment: &Commitment, proof: &RangeProof) -> bool {
     let pc_gens = PedersenGens::default();
     let bp_gens = BulletproofGens::new(64, 1);
-    
+
     // Create transcript (must match prover's)
     let mut transcript = Transcript::new(b"pq-priv-range-proof");
-    
+
     // Create compressed point from bytes (from_slice returns CompressedRistretto directly)
     let commit_compressed = CompressedRistretto::from_slice(&commitment.value_commit);
-    
+
     // Deserialize proof
     let bulletproof = match BulletproofRangeProof::from_bytes(&proof.proof_bytes) {
         Ok(proof) => proof,
         Err(_) => return false, // Malformed proof
     };
-    
+
     // Verify the proof
     bulletproof
         .verify_single(&bp_gens, &pc_gens, &mut transcript, &commit_compressed, 64)
@@ -1988,7 +1988,7 @@ pub fn balance_commitments(inputs: &[Commitment], outputs: &[Commitment]) -> boo
             compressed.decompress()
         })
         .collect();
-    
+
     // Decompress all output commitments
     let output_points: Vec<RistrettoPoint> = outputs
         .iter()
@@ -1997,22 +1997,22 @@ pub fn balance_commitments(inputs: &[Commitment], outputs: &[Commitment]) -> boo
             compressed.decompress()
         })
         .collect();
-    
+
     // Check we successfully decompressed all points
     if input_points.len() != inputs.len() || output_points.len() != outputs.len() {
         return false; // Invalid point encoding
     }
-    
+
     // Compute sum of inputs
     let input_sum = input_points
         .iter()
         .fold(RistrettoPoint::identity(), |acc, &p| acc + p);
-    
+
     // Compute sum of outputs
     let output_sum = output_points
         .iter()
         .fold(RistrettoPoint::identity(), |acc, &p| acc + p);
-    
+
     // Check if they're equal (balance)
     input_sum == output_sum
 }
