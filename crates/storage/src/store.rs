@@ -158,6 +158,7 @@ impl Store {
             ColumnFamilyDescriptor::new(schema::CF_UTXO, opts.clone()),
             ColumnFamilyDescriptor::new(schema::CF_LINKTAG, opts.clone()),
             ColumnFamilyDescriptor::new(schema::CF_META, opts.clone()),
+            ColumnFamilyDescriptor::new(schema::CF_NULLIFIERS, opts.clone()),
         ];
 
         let db = DB::open_cf_descriptors(&opts, path, cf_descriptors)?;

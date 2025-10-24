@@ -7,12 +7,14 @@ pub const CF_BLOCKS: &str = "BLOCKS";
 pub const CF_UTXO: &str = "UTXO";
 pub const CF_LINKTAG: &str = "LINKTAG";
 pub const CF_META: &str = "META";
+pub const CF_NULLIFIERS: &str = "NULLIFIERS";
 
 const PREFIX_HEADER: u8 = b'H';
 const PREFIX_BLOCK: u8 = b'B';
 const PREFIX_UTXO: u8 = b'U';
 const PREFIX_LINKTAG: u8 = b'L';
 const PREFIX_META: u8 = b'M';
+const PREFIX_NULLIFIER: u8 = b'N';
 
 pub const META_TIP: &str = "tip";
 #[allow(dead_code)]
@@ -29,6 +31,7 @@ pub enum Column {
     Utxo,
     LinkTag,
     Meta,
+    Nullifiers,
 }
 
 impl Column {
@@ -39,6 +42,7 @@ impl Column {
             Column::Utxo => CF_UTXO,
             Column::LinkTag => CF_LINKTAG,
             Column::Meta => CF_META,
+            Column::Nullifiers => CF_NULLIFIERS,
         }
     }
 }
@@ -69,6 +73,13 @@ pub fn linktag_key(tag: &[u8; 32]) -> [u8; 33] {
     let mut buf = [0u8; 33];
     buf[0] = PREFIX_LINKTAG;
     buf[1..].copy_from_slice(tag);
+    buf
+}
+
+pub fn nullifier_key(nullifier: &[u8; 32]) -> [u8; 33] {
+    let mut buf = [0u8; 33];
+    buf[0] = PREFIX_NULLIFIER;
+    buf[1..].copy_from_slice(nullifier);
     buf
 }
 

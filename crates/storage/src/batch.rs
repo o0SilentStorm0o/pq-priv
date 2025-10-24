@@ -9,7 +9,7 @@ use utxo::{OutPoint, OutputRecord, UtxoBackend, UtxoError};
 use crate::errors::StorageError;
 use crate::schema::{
     self, Column, META_COMPACT_INDEX, META_TIP, block_key, encode_height, header_key, linktag_key,
-    meta_key,
+    meta_key, nullifier_key,
 };
 use crate::store::{Store, TipInfo, TipMetadata};
 
@@ -25,6 +25,8 @@ pub struct BlockBatch {
     utxos: HashMap<OutPoint, UtxoOverlay>,
     link_tags: HashSet<[u8; 32]>,
     cleared_tags: HashSet<[u8; 32]>,
+    nullifiers: HashSet<[u8; 32]>,
+    cleared_nullifiers: HashSet<[u8; 32]>,
     compact_next: u64,
     compact_dirty: bool,
 }
@@ -42,6 +44,8 @@ impl BlockBatch {
             utxos: HashMap::new(),
             link_tags: HashSet::new(),
             cleared_tags: HashSet::new(),
+            nullifiers: HashSet::new(),
+            cleared_nullifiers: HashSet::new(),
             compact_next,
             compact_dirty: false,
         })
@@ -173,6 +177,39 @@ impl BlockBatch {
         self.writes.delete_cf(&cf, linktag_key(tag));
         Ok(())
     }
+
+    /// Check if a nullifier exists (double-spend detection for TX v2).
+    pub fn contains_nullifier(&self, nullifier: &[u8; 32]) -> Result<bool, StorageError> {
+        if self.nullifiers.contains(nullifier) {
+            return Ok(true);
+        }
+        if self.cleared_nullifiers.contains(nullifier) {
+            return Ok(false);
+        }
+        let cf = self.store.cf(Column::Nullifiers)?;
+        let key = nullifier_key(nullifier);
+        let present = self.store.db().get_cf(&cf, key)?.is_some();
+        Ok(present)
+    }
+
+    /// Record a nullifier (called when processing TX v2).
+    pub fn record_nullifier(&mut self, nullifier: [u8; 32]) -> Result<(), StorageError> {
+        if self.nullifiers.insert(nullifier) {
+            self.cleared_nullifiers.remove(&nullifier);
+            let cf = self.store.cf(Column::Nullifiers)?;
+            self.writes.put_cf(&cf, nullifier_key(&nullifier), [1u8]);
+        }
+        Ok(())
+    }
+
+    /// Remove a nullifier (called during reorg/block rollback).
+    pub fn remove_nullifier(&mut self, nullifier: &[u8; 32]) -> Result<(), StorageError> {
+        self.nullifiers.remove(nullifier);
+        self.cleared_nullifiers.insert(*nullifier);
+        let cf = self.store.cf(Column::Nullifiers)?;
+        self.writes.delete_cf(&cf, nullifier_key(nullifier));
+        Ok(())
+    }
 }
 
 impl<'a> UtxoBackend for BatchUtxoBackend<'a> {
@@ -217,5 +254,113 @@ impl<'a> UtxoBackend for BatchUtxoBackend<'a> {
         self.batch.compact_next = self.batch.compact_next.saturating_add(1);
         self.batch.compact_dirty = true;
         Ok(index)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_nullifier_tracking() {
+        let dir = tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+
+        let nullifier1 = [1u8; 32];
+        let nullifier2 = [2u8; 32];
+
+        // Record nullifier in batch
+        let mut batch = store.begin_block_batch().unwrap();
+        batch.record_nullifier(nullifier1).unwrap();
+
+        // Should be detected in batch
+        assert!(batch.contains_nullifier(&nullifier1).unwrap());
+        assert!(!batch.contains_nullifier(&nullifier2).unwrap());
+
+        // Commit batch
+        batch.commit().unwrap();
+
+        // Should persist after commit
+        let batch2 = store.begin_block_batch().unwrap();
+        assert!(batch2.contains_nullifier(&nullifier1).unwrap());
+        assert!(!batch2.contains_nullifier(&nullifier2).unwrap());
+    }
+
+    #[test]
+    fn test_nullifier_rollback() {
+        let dir = tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+
+        let nullifier = [42u8; 32];
+
+        // Insert nullifier
+        let mut batch1 = store.begin_block_batch().unwrap();
+        batch1.record_nullifier(nullifier).unwrap();
+        batch1.commit().unwrap();
+
+        // Verify it exists
+        let batch2 = store.begin_block_batch().unwrap();
+        assert!(batch2.contains_nullifier(&nullifier).unwrap());
+        drop(batch2);
+
+        // Rollback (remove nullifier)
+        let mut batch3 = store.begin_block_batch().unwrap();
+        batch3.remove_nullifier(&nullifier).unwrap();
+        batch3.commit().unwrap();
+
+        // Verify it's gone
+        let batch4 = store.begin_block_batch().unwrap();
+        assert!(!batch4.contains_nullifier(&nullifier).unwrap());
+    }
+
+    #[test]
+    fn test_nullifier_atomic_reorg() {
+        let dir = tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+
+        let nullifier1 = [10u8; 32];
+        let nullifier2 = [20u8; 32];
+
+        // Commit nullifier1
+        let mut batch1 = store.begin_block_batch().unwrap();
+        batch1.record_nullifier(nullifier1).unwrap();
+        batch1.commit().unwrap();
+
+        // Atomically: remove nullifier1, add nullifier2 (simulating reorg)
+        let mut batch2 = store.begin_block_batch().unwrap();
+        batch2.remove_nullifier(&nullifier1).unwrap();
+        batch2.record_nullifier(nullifier2).unwrap();
+
+        // Before commit: nullifier1 should be absent, nullifier2 present (in overlay)
+        assert!(!batch2.contains_nullifier(&nullifier1).unwrap());
+        assert!(batch2.contains_nullifier(&nullifier2).unwrap());
+
+        batch2.commit().unwrap();
+
+        // After commit: changes should be persisted
+        let batch3 = store.begin_block_batch().unwrap();
+        assert!(!batch3.contains_nullifier(&nullifier1).unwrap());
+        assert!(batch3.contains_nullifier(&nullifier2).unwrap());
+    }
+
+    #[test]
+    fn test_nullifier_duplicate_detection() {
+        let dir = tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+
+        let nullifier = [99u8; 32];
+
+        let mut batch = store.begin_block_batch().unwrap();
+
+        // First insert
+        batch.record_nullifier(nullifier).unwrap();
+        assert!(batch.contains_nullifier(&nullifier).unwrap());
+
+        // Second insert (idempotent - should not panic)
+        batch.record_nullifier(nullifier).unwrap();
+        assert!(batch.contains_nullifier(&nullifier).unwrap());
+
+        batch.commit().unwrap();
     }
 }

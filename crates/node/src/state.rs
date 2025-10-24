@@ -981,11 +981,7 @@ mod tests {
         chain.apply_block(block1).expect("apply block 1");
 
         let spend_output = Output::new(vec![5, 6, 7], 9, OutputMeta::default());
-        let witness = Witness::new(
-            Vec::new(),
-            base_time + 1,
-            (5_000u64).to_le_bytes().to_vec(),
-        );
+        let witness = Witness::new(Vec::new(), base_time + 1, (5_000u64).to_le_bytes().to_vec());
         let binding = binding_hash(std::slice::from_ref(&spend_output), &witness);
         let spend_input = build_signed_input(
             *coinbase_txid.as_bytes(),
@@ -1055,11 +1051,8 @@ mod tests {
             25,
             OutputMeta::default(),
         );
-        let parent_witness = Witness::new(
-            Vec::new(),
-            base_time + 1,
-            (6_000u64).to_le_bytes().to_vec(),
-        );
+        let parent_witness =
+            Witness::new(Vec::new(), base_time + 1, (6_000u64).to_le_bytes().to_vec());
         let parent_binding = binding_hash(std::slice::from_ref(&parent_output), &parent_witness);
         let parent_input = build_signed_input(
             *block1.txs[0].txid().as_bytes(),
@@ -1097,11 +1090,8 @@ mod tests {
             10,
             OutputMeta::default(),
         );
-        let child_witness = Witness::new(
-            Vec::new(),
-            base_time + 2,
-            (4_000u64).to_le_bytes().to_vec(),
-        );
+        let child_witness =
+            Witness::new(Vec::new(), base_time + 2, (4_000u64).to_le_bytes().to_vec());
         let child_binding = binding_hash(std::slice::from_ref(&child_output), &child_witness);
         let child_input = build_signed_input(
             *parent_tx.txid().as_bytes(),
