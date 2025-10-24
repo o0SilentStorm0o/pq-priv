@@ -187,7 +187,10 @@ fn test_balance_commitments_valid_single() {
 
     // Same commitment as input and output should balance
     assert!(
-        balance_commitments(std::slice::from_ref(&commitment), std::slice::from_ref(&commitment)),
+        balance_commitments(
+            std::slice::from_ref(&commitment),
+            std::slice::from_ref(&commitment)
+        ),
         "identical input and output should balance"
     );
 }
@@ -413,7 +416,7 @@ fn test_range_proof_cross_validation() {
 #[test]
 fn test_batch_verify_range_all_valid() {
     use crypto::batch_verify_range;
-    
+
     // Create multiple valid proofs
     let proofs_data: Vec<_> = (0..10)
         .map(|i| {
@@ -424,23 +427,20 @@ fn test_batch_verify_range_all_valid() {
                 b[31] = (i + 1) as u8;
                 b
             };
-            
+
             let commitment = commit_value(value, &blinding);
             let proof = prove_range(value, &blinding).expect("proof should succeed");
-            
+
             (commitment, proof)
         })
         .collect();
-    
+
     // Create reference slice for batch verification
-    let proof_refs: Vec<_> = proofs_data
-        .iter()
-        .map(|(c, p)| (c, p))
-        .collect();
-    
+    let proof_refs: Vec<_> = proofs_data.iter().map(|(c, p)| (c, p)).collect();
+
     // Batch verify all proofs
     let results = batch_verify_range(&proof_refs);
-    
+
     // All should be valid
     assert_eq!(results.len(), 10);
     assert!(results.iter().all(|&r| r), "all proofs should verify");
@@ -449,10 +449,10 @@ fn test_batch_verify_range_all_valid() {
 #[test]
 fn test_batch_verify_range_mixed_validity() {
     use crypto::batch_verify_range;
-    
+
     // Create mix of valid and invalid proofs
     let mut proofs_data: Vec<_> = Vec::new();
-    
+
     // Add 3 valid proofs
     for i in 0..3 {
         let value = 1000u64 * (i + 1);
@@ -461,13 +461,13 @@ fn test_batch_verify_range_mixed_validity() {
             b[0] = i as u8;
             b
         };
-        
+
         let commitment = commit_value(value, &blinding);
         let proof = prove_range(value, &blinding).expect("proof should succeed");
-        
+
         proofs_data.push((commitment, proof, true)); // Mark as valid
     }
-    
+
     // Add 2 invalid proofs (wrong commitment-proof pairs)
     for i in 3..5 {
         let value1 = 2000u64;
@@ -482,28 +482,26 @@ fn test_batch_verify_range_mixed_validity() {
             b[0] = (i + 100) as u8;
             b
         };
-        
+
         let commitment = commit_value(value1, &blinding1);
         let proof = prove_range(value2, &blinding2).expect("proof should succeed");
-        
+
         proofs_data.push((commitment, proof, false)); // Mark as invalid
     }
-    
+
     // Create reference slice
-    let proof_refs: Vec<_> = proofs_data
-        .iter()
-        .map(|(c, p, _)| (c, p))
-        .collect();
-    
+    let proof_refs: Vec<_> = proofs_data.iter().map(|(c, p, _)| (c, p)).collect();
+
     // Batch verify
     let results = batch_verify_range(&proof_refs);
-    
+
     // Check results match expected validity
     assert_eq!(results.len(), 5);
     for (i, &result) in results.iter().enumerate() {
         let expected = proofs_data[i].2;
         assert_eq!(
-            result, expected,
+            result,
+            expected,
             "proof {} should be {}",
             i,
             if expected { "valid" } else { "invalid" }
@@ -515,7 +513,7 @@ fn test_batch_verify_range_mixed_validity() {
 fn test_batch_verify_range_performance_smoke_test() {
     use crypto::batch_verify_range;
     use std::time::Instant;
-    
+
     // Create 50 valid proofs
     println!("Generating 50 range proofs for performance test...");
     let proofs_data: Vec<_> = (0..50)
@@ -527,27 +525,24 @@ fn test_batch_verify_range_performance_smoke_test() {
                 b[1] = ((i / 256) % 256) as u8;
                 b
             };
-            
+
             let commitment = commit_value(value, &blinding);
             let proof = prove_range(value, &blinding).expect("proof should succeed");
-            
+
             (commitment, proof)
         })
         .collect();
-    
-    let proof_refs: Vec<_> = proofs_data
-        .iter()
-        .map(|(c, p)| (c, p))
-        .collect();
-    
+
+    let proof_refs: Vec<_> = proofs_data.iter().map(|(c, p)| (c, p)).collect();
+
     // Time batch verification
     let start = Instant::now();
     let results = batch_verify_range(&proof_refs);
     let duration = start.elapsed();
-    
+
     // All should verify
     assert!(results.iter().all(|&r| r), "all proofs should verify");
-    
+
     // Performance check (should be < 100ms for 50 proofs with parallel verification)
     println!("Batch verified 50 proofs in {:?}", duration);
     assert!(

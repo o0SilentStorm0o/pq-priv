@@ -2065,7 +2065,7 @@ pub fn balance_commitments(inputs: &[Commitment], outputs: &[Commitment]) -> boo
 /// ```
 pub fn batch_verify_range(proofs: &[(&Commitment, &RangeProof)]) -> Vec<bool> {
     use rayon::prelude::*;
-    
+
     proofs
         .par_iter()
         .map(|(commitment, proof)| verify_range(commitment, proof))

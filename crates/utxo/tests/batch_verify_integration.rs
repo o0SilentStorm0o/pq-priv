@@ -230,16 +230,10 @@ fn block_with_one_invalid_signature_is_rejected() {
     let outpoint2 = OutPoint::new([20; 32], 0);
 
     backend
-        .insert(
-            outpoint1,
-            OutputRecord::new(create_output(1000), 0, 0),
-        )
+        .insert(outpoint1, OutputRecord::new(create_output(1000), 0, 0))
         .unwrap();
     backend
-        .insert(
-            outpoint2,
-            OutputRecord::new(create_output(2000), 0, 1),
-        )
+        .insert(outpoint2, OutputRecord::new(create_output(2000), 0, 1))
         .unwrap();
 
     // Create transaction with 2 inputs
