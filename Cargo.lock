@@ -3138,10 +3138,12 @@ dependencies = [
 name = "wallet"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "clap",
  "crypto",
  "hex",
  "serde",
+ "serde_bytes",
  "serde_json",
  "thiserror 1.0.69",
  "tracing",

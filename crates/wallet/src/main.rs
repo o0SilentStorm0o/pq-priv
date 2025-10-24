@@ -7,6 +7,12 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::{error, info};
 
+// TODO: Wire up in CLI commands (Send, Audit)
+#[allow(unused_imports)]
+use wallet::{
+    AuditLevel, ProverConfig, SecurityLevel, StarkWitness, create_audit_packet, generate_proof,
+};
+
 #[derive(Parser)]
 #[command(author, version, about = "PQ-PRIV wallet prototype")]
 struct Cli {
