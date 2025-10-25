@@ -236,6 +236,17 @@ pub struct PrivacyMetrics {
     invalid_proofs_total: Arc<Mutex<u64>>,
     /// Total number of commitment balance failures (counter).
     balance_failures_total: Arc<Mutex<u64>>,
+    
+    // STARK metrics
+    /// STARK proof verification latency histogram (milliseconds).
+    /// Buckets: [10, 25, 50, 100, 200, 500, 1000, +Inf] ms
+    stark_verify_latency_buckets: Arc<Mutex<[u64; 8]>>,
+    /// Total number of STARK proof verifications (counter).
+    stark_verify_count_total: Arc<Mutex<u64>>,
+    /// Total number of invalid STARK proofs rejected (counter).
+    stark_invalid_proofs_total: Arc<Mutex<u64>>,
+    /// Total number of nullifier collisions detected (counter).
+    nullifier_collisions_total: Arc<Mutex<u64>>,
 }
 
 impl PrivacyMetrics {
@@ -245,6 +256,10 @@ impl PrivacyMetrics {
             verify_count_total: Arc::new(Mutex::new(0)),
             invalid_proofs_total: Arc::new(Mutex::new(0)),
             balance_failures_total: Arc::new(Mutex::new(0)),
+            stark_verify_latency_buckets: Arc::new(Mutex::new([0; 8])),
+            stark_verify_count_total: Arc::new(Mutex::new(0)),
+            stark_invalid_proofs_total: Arc::new(Mutex::new(0)),
+            nullifier_collisions_total: Arc::new(Mutex::new(0)),
         }
     }
 
@@ -278,6 +293,38 @@ impl PrivacyMetrics {
     /// Record a commitment balance verification failure.
     pub fn record_balance_failure(&self) {
         *self.balance_failures_total.lock() += 1;
+    }
+
+    /// Record a successful STARK proof verification with duration.
+    ///
+    /// # Arguments
+    /// * `duration_ms` - Verification duration in milliseconds
+    pub fn record_stark_verify_success(&self, duration_ms: u64) {
+        *self.stark_verify_count_total.lock() += 1;
+
+        // Bucket boundaries: [10, 25, 50, 100, 200, 500, 1000, +Inf]
+        let mut buckets = self.stark_verify_latency_buckets.lock();
+        let bucket_idx = match duration_ms {
+            0..=10 => 0,
+            11..=25 => 1,
+            26..=50 => 2,
+            51..=100 => 3,
+            101..=200 => 4,
+            201..=500 => 5,
+            501..=1000 => 6,
+            _ => 7, // +Inf
+        };
+        buckets[bucket_idx] += 1;
+    }
+
+    /// Record an invalid STARK proof rejection.
+    pub fn record_stark_invalid_proof(&self) {
+        *self.stark_invalid_proofs_total.lock() += 1;
+    }
+
+    /// Record a nullifier collision detection.
+    pub fn record_nullifier_collision(&self) {
+        *self.nullifier_collisions_total.lock() += 1;
     }
 
     /// Generate Prometheus exposition format output for privacy metrics.
@@ -357,6 +404,79 @@ impl PrivacyMetrics {
         output.push_str(&format!(
             "pqpriv_commitment_balance_fail_total {}\n",
             balance_failures
+        ));
+
+        // STARK proof verification latency histogram
+        {
+            let buckets = *self.stark_verify_latency_buckets.lock();
+            let count: u64 = buckets.iter().sum();
+
+            output.push_str(
+                "# HELP pqpriv_stark_verify_ms STARK proof verification duration in milliseconds\n",
+            );
+            output.push_str("# TYPE pqpriv_stark_verify_ms histogram\n");
+
+            let bucket_bounds = [10.0, 25.0, 50.0, 100.0, 200.0, 500.0, 1000.0];
+            let mut cumulative = 0u64;
+
+            for (i, &bound) in bucket_bounds.iter().enumerate() {
+                cumulative += buckets[i];
+                output.push_str(&format!(
+                    "pqpriv_stark_verify_ms_bucket{{le=\"{}\"}} {}\n",
+                    bound, cumulative
+                ));
+            }
+
+            cumulative += buckets[7];
+            output.push_str(&format!(
+                "pqpriv_stark_verify_ms_bucket{{le=\"+Inf\"}} {}\n",
+                cumulative
+            ));
+
+            output.push_str(&format!("pqpriv_stark_verify_ms_count {}\n", count));
+
+            let sum_ms = (buckets[0] as f64 * 5.0)
+                + (buckets[1] as f64 * 17.5)
+                + (buckets[2] as f64 * 37.5)
+                + (buckets[3] as f64 * 75.0)
+                + (buckets[4] as f64 * 150.0)
+                + (buckets[5] as f64 * 350.0)
+                + (buckets[6] as f64 * 750.0)
+                + (buckets[7] as f64 * 1500.0);
+            output.push_str(&format!("pqpriv_stark_verify_ms_sum {:.2}\n", sum_ms));
+        }
+
+        // STARK verification counter
+        let stark_verify_count = *self.stark_verify_count_total.lock();
+        output.push_str(
+            "# HELP pqpriv_stark_verify_count Total number of STARK proof verifications\n",
+        );
+        output.push_str("# TYPE pqpriv_stark_verify_count counter\n");
+        output.push_str(&format!(
+            "pqpriv_stark_verify_count {}\n",
+            stark_verify_count
+        ));
+
+        // STARK invalid proof counter
+        let stark_invalid_count = *self.stark_invalid_proofs_total.lock();
+        output.push_str(
+            "# HELP pqpriv_stark_invalid_total Number of invalid STARK proofs rejected\n",
+        );
+        output.push_str("# TYPE pqpriv_stark_invalid_total counter\n");
+        output.push_str(&format!(
+            "pqpriv_stark_invalid_total {}\n",
+            stark_invalid_count
+        ));
+
+        // Nullifier collision counter
+        let nullifier_collisions = *self.nullifier_collisions_total.lock();
+        output.push_str(
+            "# HELP pqpriv_nullifier_collision_total Number of nullifier collisions detected\n",
+        );
+        output.push_str("# TYPE pqpriv_nullifier_collision_total counter\n");
+        output.push_str(&format!(
+            "pqpriv_nullifier_collision_total {}\n",
+            nullifier_collisions
         ));
 
         output

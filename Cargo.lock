@@ -3143,6 +3143,7 @@ dependencies = [
  "blake3",
  "clap",
  "crypto",
+ "crypto-stark",
  "hex",
  "serde",
  "serde_bytes",
