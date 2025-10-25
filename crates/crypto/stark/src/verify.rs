@@ -55,6 +55,12 @@ pub fn verify_one_of_many(
             "Invalid trace commitment size (expected 32 bytes)".to_string(),
         ));
     }
+    
+    if proof.transcript_challenge.len() != 32 {
+        return Err(VerifyError::InvalidProof(
+            "Invalid transcript challenge size (expected 32 bytes)".to_string(),
+        ));
+    }
 
     // Step 2: Setup FRI verifier
     let fri_params = match params.security {
@@ -64,7 +70,24 @@ pub fn verify_one_of_many(
 
     let fri_verifier = FriVerifier::new(fri_params.clone());
 
-    // Step 3: Generate FRI challenges from trace commitment
+    // Step 3: Verify FRI proof has required query proofs
+    if proof.fri_proof.query_proofs.is_empty() {
+        return Err(VerifyError::InvalidProof(
+            "FRI proof missing query proofs".to_string(),
+        ));
+    }
+    
+    if proof.fri_proof.query_proofs.len() != fri_params.num_queries {
+        return Err(VerifyError::InvalidProof(
+            format!(
+                "FRI proof has {} queries, expected {}",
+                proof.fri_proof.query_proofs.len(),
+                fri_params.num_queries
+            ),
+        ));
+    }
+
+    // Step 4: Generate FRI challenges from trace commitment
     // Extract first field element from 32-byte digest for challenge derivation
     let mut trace_seed_bytes = [0u8; 8];
     trace_seed_bytes.copy_from_slice(&proof.trace_commitment[0..8]);
@@ -77,7 +100,7 @@ pub fn verify_one_of_many(
         })
         .collect();
 
-    // Step 4: Verify FRI proof
+    // Step 5: Verify FRI proof
     if !fri_verifier.verify(&proof.fri_proof, &challenges) {
         return Err(VerifyError::VerificationFailed(
             "FRI verification failed".to_string(),

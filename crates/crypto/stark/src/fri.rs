@@ -92,7 +92,16 @@ pub struct FriQueryProof {
     pub merkle_proofs: Vec<MerkleProof>,
     
     /// Evaluations at each folding round.
+    /// For proper folding verification, each round includes:
+    /// - Round 0: Single evaluation at query_index
+    /// - Round i: Folded evaluation
     pub evaluations: Vec<FieldElement>,
+    
+    /// Coset evaluations for folding consistency check.
+    /// coset_evaluations[round] contains all reduction_factor evaluations
+    /// that fold into evaluations[round+1].
+    /// Only needed for rounds with folding (not final round).
+    pub coset_evaluations: Vec<Vec<FieldElement>>,
 }
 
 /// Complete FRI proof (commitment + query proofs).
@@ -201,6 +210,7 @@ impl FriProver {
     fn prove_single_query(&self, query_index: usize) -> FriQueryProof {
         let mut merkle_proofs = Vec::new();
         let mut evaluations = Vec::new();
+        let mut coset_evaluations = Vec::new();
         let mut current_index = query_index;
 
         for (round, tree) in self.round_trees.iter().enumerate() {
@@ -212,6 +222,27 @@ impl FriProver {
             // Get Merkle proof
             merkle_proofs.push(tree.prove(current_index));
             
+            // For all rounds except last, provide coset evaluations for folding check
+            // Skip if polynomial is too small to fold (already constant or near-constant)
+            if round < self.round_trees.len() - 1 && poly.len() > self.params.reduction_factor {
+                // The coset that folds into next round index
+                let next_round_index = current_index / self.params.reduction_factor;
+                let coset_base = next_round_index * self.params.reduction_factor;
+                let mut coset = Vec::new();
+                
+                for j in 0..self.params.reduction_factor {
+                    let idx = coset_base + j;
+                    if idx < poly.len() {
+                        coset.push(poly[idx]);
+                    }
+                }
+                
+                // Only add if we got full coset
+                if coset.len() == self.params.reduction_factor {
+                    coset_evaluations.push(coset);
+                }
+            }
+            
             // Next round index (folding reduces domain size)
             current_index /= self.params.reduction_factor;
         }
@@ -220,18 +251,25 @@ impl FriProver {
             query_index,
             merkle_proofs,
             evaluations,
+            coset_evaluations,
         }
     }
 
     /// Fold polynomial by reduction factor.
     ///
     /// Combines evaluations using random challenge:
-    /// `f'(x) = f(x) + challenge * f(-x)`
+    /// `folded[i] = Σ(poly[i*r+j] * challenge^j)` for j=0..r
     fn fold_polynomial(&self, poly: &[FieldElement], challenge: FieldElement) -> Vec<FieldElement> {
         let n = poly.len();
         
-        // If polynomial is already small enough, return as-is
-        if n <= self.params.reduction_factor {
+        // If polynomial is single element, can't fold further
+        if n == 1 {
+            return poly.to_vec();
+        }
+        
+        // Check if we can fold (need at least reduction_factor elements)
+        if n < self.params.reduction_factor {
+            // Shouldn't happen in proper FRI, but handle gracefully
             return poly.to_vec();
         }
         
@@ -297,14 +335,14 @@ impl FriVerifier {
         query_proof: &FriQueryProof,
         challenges: &[FieldElement],
     ) -> bool {
-        let mut current_index = query_proof.query_index;
+        let mut coset_idx = 0;
 
         // Check Merkle proofs and folding consistency
         for (round, merkle_proof) in query_proof.merkle_proofs.iter().enumerate() {
             let root = proof.commitment.round_roots[round];
             
             // Verify Merkle proof
-            if !merkle_proof.verify(root) {
+            if !MerkleTree::verify(root, merkle_proof) {
                 return false;
             }
 
@@ -313,22 +351,21 @@ impl FriVerifier {
                 return false;
             }
 
-            // Check folding consistency (if not final round)
-            if round < challenges.len() {
+            // Check folding consistency (if not final round and coset exists)
+            if round < challenges.len() && coset_idx < query_proof.coset_evaluations.len() {
                 let challenge = challenges[round];
                 let next_eval = query_proof.evaluations[round + 1];
+                let coset = &query_proof.coset_evaluations[coset_idx];
                 
                 if !self.check_folding_consistency(
-                    query_proof.evaluations[round],
+                    coset,
                     next_eval,
                     challenge,
-                    current_index,
                 ) {
                     return false;
                 }
+                coset_idx += 1;
             }
-
-            current_index /= self.params.reduction_factor;
         }
 
         // Verify final evaluation matches final polynomial
@@ -337,16 +374,26 @@ impl FriVerifier {
     }
 
     /// Check that folding was done correctly.
+    ///
+    /// Verifies: folded_eval = Σ(coset[j] * challenge^j) for j=0..reduction_factor
     fn check_folding_consistency(
         &self,
-        _current_eval: FieldElement,
-        _next_eval: FieldElement,
-        _challenge: FieldElement,
-        _index: usize,
+        coset: &[FieldElement],
+        expected_folded: FieldElement,
+        challenge: FieldElement,
     ) -> bool {
-        // Simplified check (full implementation would verify folding formula)
-        // In production: verify f'(x) = f(x) + challenge * f(-x)
-        true
+        if coset.len() != self.params.reduction_factor {
+            return false;
+        }
+        
+        // Compute folded value from coset: coset[0] + coset[1]*α + ... + coset[r-1]*α^(r-1)
+        let mut computed_folded = FieldElement::ZERO;
+        for (j, &eval) in coset.iter().enumerate() {
+            let weight = challenge.pow(j as u64);
+            computed_folded = computed_folded + eval * weight;
+        }
+        
+        computed_folded == expected_folded
     }
 }
 

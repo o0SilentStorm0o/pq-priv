@@ -117,7 +117,7 @@ pub fn prove_one_of_many(
         trace[i] = trace[i - 1] + FieldElement::ONE;
     }
 
-    // Step 5: Run FRI protocol
+    // Step 5: FRI protocol
     let fri_params = match params.security {
         crate::params::SecurityLevel::Fast => FriParams::test(),
         _ => FriParams::secure(),
@@ -125,10 +125,16 @@ pub fn prove_one_of_many(
 
     let mut fri_prover = FriProver::new(fri_params.clone(), trace.clone());
     
-    // Generate FRI challenges (deterministic from Merkle root)
+    // Step 6: Build canonical 32-byte trace commitment FIRST
+    // (needed for FRI challenge generation)
+    let trace_digest = Poseidon2::hash_to_digest(&trace);
+    
+    // Generate FRI challenges (deterministic from trace commitment)
     let challenges: Vec<FieldElement> = (0..fri_params.num_rounds())
         .map(|i| {
-            let seed = merkle_root.to_canonical_u64().wrapping_add(i as u64);
+            let mut seed_bytes = [0u8; 8];
+            seed_bytes.copy_from_slice(&trace_digest[0..8]);
+            let seed = FieldElement::from_bytes(&seed_bytes).to_canonical_u64().wrapping_add(i as u64);
             FieldElement::from_u64(seed)
         })
         .collect();
@@ -141,10 +147,6 @@ pub fn prove_one_of_many(
         .collect();
     
     let query_proofs = fri_prover.prove_queries(&query_indices);
-
-    // Step 6: Build canonical 32-byte trace commitment
-    // Combine trace elements into single digest for collision resistance
-    let trace_digest = Poseidon2::hash_to_digest(&trace);
 
     // Step 7: Build Fiat-Shamir transcript (anti-malleability)
     let mut transcript = Transcript::new();

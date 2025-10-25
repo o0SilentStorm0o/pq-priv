@@ -23,6 +23,7 @@
 //! - Hash function: Poseidon2 (STARK-friendly)
 
 pub mod arith;
+pub mod batch;
 pub mod field;
 pub mod fri;
 pub mod merkle;
@@ -39,6 +40,7 @@ pub use fri::{FriCommitment, FriParams, FriProof, FriProver, FriVerifier};
 pub use merkle_tree::{MerkleProof, MerkleTree};
 pub use poseidon2::{Poseidon2, STATE_WIDTH};
 
+pub use batch::{verify_batch, verify_batch_sequential, BatchVerifyResult, ProofContext};
 pub use params::{SecurityLevel, StarkParams};
 pub use prove::prove_one_of_many;
 pub use traits::{StarkProof, StarkWitness};
