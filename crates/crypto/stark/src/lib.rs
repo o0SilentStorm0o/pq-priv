@@ -24,6 +24,7 @@
 
 pub mod arith;
 pub mod field;
+pub mod fri;
 pub mod merkle;
 pub mod merkle_tree;
 pub mod params;
@@ -33,6 +34,7 @@ pub mod traits;
 pub mod verify;
 
 pub use field::{FieldElement, GOLDILOCKS_PRIME};
+pub use fri::{FriCommitment, FriParams, FriProof, FriProver, FriVerifier};
 pub use merkle_tree::{MerkleProof, MerkleTree};
 pub use poseidon2::{Poseidon2, STATE_WIDTH};
 

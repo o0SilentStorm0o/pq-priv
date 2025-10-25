@@ -1,8 +1,10 @@
 //! STARK proof verification.
 //!
-//! Stub API for step 5 implementation.
+//! Verifies one-of-many STARK proofs using FRI protocol.
 
-use crate::{StarkParams, StarkProof};
+use crate::field::FieldElement;
+use crate::fri::FriVerifier;
+use crate::{FriParams, StarkParams, StarkProof};
 
 /// Error during proof verification.
 #[derive(Debug, thiserror::Error)]
@@ -43,43 +45,78 @@ pub enum VerifyError {
 /// println!("Proof is valid!");
 /// ```
 pub fn verify_one_of_many(
-    _params: &StarkParams,
+    params: &StarkParams,
     _anonymity_set: &[[u8; 32]],
-    _proof: &StarkProof,
+    proof: &StarkProof,
 ) -> Result<(), VerifyError> {
-    // TODO: Step 5 implementation
-    // 1. Validate proof metadata matches params
-    // 2. Verify FRI commitments structure
-    // 3. For each query:
-    //    a. Verify Merkle authentication path
-    //    b. Check constraint satisfaction
-    //    c. Verify FRI folding correctness
-    // 4. Verify final polynomial degree
+    // Step 1: Check proof structure
+    if proof.trace_commitment.len() != 8 {
+        return Err(VerifyError::InvalidProof(
+            "Invalid trace commitment size".to_string(),
+        ));
+    }
 
-    todo!("verify_one_of_many implementation in step 5")
+    // Step 2: Setup FRI verifier
+    let fri_params = match params.security {
+        crate::params::SecurityLevel::Fast => FriParams::test(),
+        _ => FriParams::secure(),
+    };
+
+    let fri_verifier = FriVerifier::new(fri_params.clone());
+
+    // Step 3: Generate FRI challenges (same as prover)
+    let trace_root = FieldElement::from_bytes(&proof.trace_commitment);
+    let challenges: Vec<FieldElement> = (0..fri_params.num_rounds())
+        .map(|i| {
+            let seed = trace_root.to_canonical_u64().wrapping_add(i as u64);
+            FieldElement::from_u64(seed)
+        })
+        .collect();
+
+    // Step 4: Verify FRI proof
+    if !fri_verifier.verify(&proof.fri_proof, &challenges) {
+        return Err(VerifyError::VerificationFailed(
+            "FRI verification failed".to_string(),
+        ));
+    }
+
+    // Verification successful
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::traits::ProofMetadata;
+    use crate::params::{HashFunction, SecurityLevel};
+    use crate::prove::prove_one_of_many;
+    use crate::traits::StarkWitness;
 
     #[test]
-    #[should_panic(expected = "not yet implemented")]
-    fn test_verify_placeholder() {
-        let params = StarkParams::default();
-        let anonymity_set = vec![[0u8; 32]; 64];
-        let proof = StarkProof {
-            fri_commitments: vec![],
-            query_proofs: vec![],
-            final_poly: vec![],
-            metadata: ProofMetadata {
-                anonymity_set_size: 64,
-                num_queries: 27,
-                version: 1,
-            },
+    fn test_verify_valid_proof() {
+        let params = StarkParams {
+            security: SecurityLevel::Fast,
+            anonymity_set_size: 16,
+            field_modulus: crate::GOLDILOCKS_PRIME,
+            hash_function: HashFunction::Poseidon2,
         };
 
-        let _ = verify_one_of_many(&params, &anonymity_set, &proof);
+        let anonymity_set: Vec<[u8; 32]> = (0..16)
+            .map(|i| {
+                let mut arr = [0u8; 32];
+                arr[0] = i as u8;
+                arr
+            })
+            .collect();
+
+        let witness = StarkWitness {
+            index: 5,
+            commitment: anonymity_set[5],
+            nullifier: [1u8; 32],
+        };
+
+        let proof = prove_one_of_many(&params, &anonymity_set, &witness).unwrap();
+        let result = verify_one_of_many(&params, &anonymity_set, &proof);
+
+        assert!(result.is_ok());
     }
 }

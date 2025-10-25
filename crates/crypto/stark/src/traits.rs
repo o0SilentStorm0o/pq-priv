@@ -3,48 +3,24 @@
 //! Defines generic interfaces for proving and verification, allowing future
 //! backend swaps (e.g., GPU acceleration, zkVM integration).
 
-use serde::{Deserialize, Serialize};
+use crate::fri::FriProof;
+use serde::Serialize;
 
 /// A STARK proof demonstrating one-of-many membership.
 ///
 /// Proves that a committed value exists in an anonymity set of size N
 /// without revealing the index.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct StarkProof {
-    /// FRI commitment layers
-    pub fri_commitments: Vec<[u8; 32]>,
+    /// Merkle root of execution trace
+    pub trace_commitment: [u8; 8],
 
-    /// Query responses (trace columns + Merkle paths)
-    pub query_proofs: Vec<QueryProof>,
+    /// FRI proof of low-degree polynomial
+    #[serde(skip)]
+    pub fri_proof: FriProof,
 
-    /// Final polynomial coefficients (after FRI reduction)
-    pub final_poly: Vec<u64>,
-
-    /// Proof metadata
-    pub metadata: ProofMetadata,
-}
-
-/// Metadata for proof verification.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProofMetadata {
-    /// Anonymity set size (power of 2)
-    pub anonymity_set_size: usize,
-
-    /// Security level (number of FRI queries)
-    pub num_queries: usize,
-
-    /// Protocol version
-    pub version: u8,
-}
-
-/// A single FRI query response.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QueryProof {
-    /// Trace evaluations at query position
-    pub trace_values: Vec<u64>,
-
-    /// Merkle authentication path
-    pub merkle_path: Vec<[u8; 32]>,
+    /// Query responses (trace columns at query positions)
+    pub query_responses: Vec<Vec<u64>>,
 }
 
 /// Witness data for STARK proof generation.
@@ -86,21 +62,6 @@ pub struct Constraint {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_proof_metadata_serialization() {
-        let metadata = ProofMetadata {
-            anonymity_set_size: 64,
-            num_queries: 27,
-            version: 1,
-        };
-
-        let json = serde_json::to_string(&metadata).unwrap();
-        let deserialized: ProofMetadata = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(deserialized.anonymity_set_size, 64);
-        assert_eq!(deserialized.num_queries, 27);
-    }
 
     #[test]
     fn test_stark_witness_construction() {
