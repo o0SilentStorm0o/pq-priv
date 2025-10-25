@@ -5,6 +5,67 @@
 //! - Internal nodes: Poseidon2(left_child || right_child)
 //! - Root: single field element committing to entire set
 //!
+//! ## Security Properties
+//!
+//! ### Hiding Witness Index
+//! The Merkle tree MUST NOT reveal which leaf corresponds to the spent UTXO.
+//! This is achieved by:
+//! 1. **Deterministic padding**: Pad to next power-of-2 with dummy leaves
+//!    generated as `Poseidon2("PAD" || index || merkle_root_of_real_leaves)`
+//! 2. **Index hiding**: STARK proof does NOT encode witness index in trace;
+//!    only the witness element (commitment) is included
+//! 3. **Constant-time selection**: Witness element selected using
+//!    constant-time operations to prevent timing side-channels
+//!
+//! ### Transcript Binding
+//! The Merkle root is absorbed into the Fiat-Shamir transcript to:
+//! - **Prevent proof extraction**: Proof cannot be reused with different anonymity set
+//! - **Prevent malleability**: Root commits to entire set structure
+//! - **Prevent padding oracle**: Real set size also absorbed separately
+//!
+//! ## Usage in STARK Proofs
+//!
+//! 1. **Prover** builds Merkle tree from anonymity set (with padding)
+//! 2. **Prover** generates Merkle proof for witness index (internally)
+//! 3. **Prover** binds Merkle root to transcript (anti-malleability)
+//! 4. **Verifier** receives Merkle root in proof
+//! 5. **Verifier** checks root matches expected anonymity set
+//! 6. **Verifier** verifies STARK constraints bind to root
+//!
+//! ## Example
+//!
+//! ```ignore
+//! use crypto_stark::merkle_tree::MerkleTree;
+//! use crypto_stark::field::FieldElement;
+//!
+//! // Anonymity set (UTXO commitments)
+//! let commitments = vec![
+//!     FieldElement::from_u64(100),
+//!     FieldElement::from_u64(200),
+//!     FieldElement::from_u64(300),
+//!     FieldElement::from_u64(400),
+//! ];
+//!
+//! // Build Merkle tree (automatically pads to power-of-2)
+//! let tree = MerkleTree::new(commitments);
+//!
+//! // Get Merkle root (for transcript binding)
+//! let root = tree.root();
+//!
+//! // Generate proof for witness (index hidden in final STARK proof)
+//! let witness_index = 2; // NOT revealed to verifier
+//! let proof = tree.prove(witness_index);
+//!
+//! // Verify proof (internally used, not exposed in public API)
+//! assert!(MerkleTree::verify(root, &proof));
+//! ```
+//!
+//! ## References
+//!
+//! - "One-out-of-Many Proofs: Or How to Leak a Secret and Spend a Coin"
+//! - STARK Merkle commitment schemes
+//! - Poseidon2 hash function specification
+//!
 //! Properties:
 //! - Membership proofs: O(log N) size
 //! - Verification: O(log N) Poseidon2 hashes

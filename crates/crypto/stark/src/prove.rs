@@ -108,8 +108,8 @@ pub fn prove_one_of_many(
     let trace_length = 16; // Small trace for one-of-many
     let mut trace = vec![FieldElement::ZERO; trace_length];
     
-    // Encode witness index using constant-time select (no timing leak)
-    // We encode the witness element, NOT the index directly
+    // Encode witness element using constant-time select (no timing leak)
+    // We encode the witness element, NOT the index directly (prevents index leakage)
     let witness_elem = {
         let mut result = FieldElement::ZERO;
         for (i, elem) in set_elements.iter().enumerate() {
@@ -120,9 +120,18 @@ pub fn prove_one_of_many(
         result
     };
     
-    trace[0] = FieldElement::from_u64(witness.index as u64); // Index encoding (TODO: consider hiding this too)
-    trace[1] = witness_elem; // Witness commitment (constant-time selected)
-    trace[2] = merkle_root; // Bind trace to anonymity set root
+    // PRIVACY: Do NOT encode index directly - it leaks witness position!
+    // Instead, we prove:
+    //   1. witness_elem exists in merkle_tree (via Merkle proof)
+    //   2. witness_elem is correctly computed (via STARK constraints)
+    //   3. merkle_root binds to full anonymity set
+    //
+    // The index is ONLY used internally for Merkle proof generation,
+    // but is NEVER revealed in the trace or proof output.
+    
+    trace[0] = witness_elem; // Witness commitment (constant-time selected)
+    trace[1] = merkle_root; // Bind trace to anonymity set Merkle root
+    trace[2] = FieldElement::from_u64(set_elements.len() as u64); // Real set size (before padding)
     
     // Fill rest of trace with constraint evaluations
     for i in 3..trace_length {
@@ -166,7 +175,14 @@ pub fn prove_one_of_many(
     transcript.absorb_network_id(witness.network_id);
     transcript.absorb_nullifier(&witness.nullifier);
     transcript.absorb_spend_tag(&witness.spend_tag);
-    transcript.absorb_anonymity_set_root(&trace_digest); // Bind to trace commitment
+    
+    // CRITICAL: Bind transcript to Merkle root (prevents proof extraction)
+    // The Merkle root commits to the entire anonymity set, so binding to it
+    // prevents an adversary from reusing a proof with a different set.
+    let merkle_root_bytes = field_element_to_bytes(merkle_root);
+    transcript.absorb_anonymity_set_root(&merkle_root_bytes);
+    
+    // Also bind to anonymity set size (prevents padding oracle)
     transcript.absorb_anonymity_set_size(anonymity_set.len());
     
     let transcript_challenge = transcript.finalize_to_bytes();
@@ -216,6 +232,14 @@ fn constant_time_select(mask: u64, true_val: FieldElement, false_val: FieldEleme
 }
 
 // ========== Helper Functions ==========
+
+/// Convert field element to 32-byte array for transcript binding.
+fn field_element_to_bytes(elem: FieldElement) -> [u8; 32] {
+    let value = elem.to_canonical_u64();
+    let mut bytes = [0u8; 32];
+    bytes[0..8].copy_from_slice(&value.to_le_bytes());
+    bytes
+}
 
 /// Compute padding seed from real leaves (binding dummy leaves to actual set).
 fn compute_padding_seed(real_leaves: &[FieldElement]) -> FieldElement {
