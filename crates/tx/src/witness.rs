@@ -2,6 +2,7 @@
 //!
 //! Adds nullifier and spend tag fields for anonymous spending.
 
+use crypto_stark::{FieldElement, Poseidon2};
 use serde::{Deserialize, Serialize};
 
 /// Nullifier prevents double-spending without revealing which UTXO was spent.
@@ -71,14 +72,53 @@ impl SpendTag {
 /// let nullifier = compute_nullifier(&sk_spend, &commitment, 1, 2);
 /// ```
 pub fn compute_nullifier(
-    _sk_spend: &[u8; 32],
-    _commitment: &[u8; 32],
-    _net_id: u8,
-    _tx_version: u16,
+    sk_spend: &[u8; 32],
+    commitment: &[u8; 32],
+    net_id: u8,
+    tx_version: u16,
 ) -> Nullifier {
-    // TODO: Implement Poseidon2 hash in Step 4 (after STARK arith module)
-    // For now, return placeholder
-    todo!("Poseidon2 implementation in Step 4")
+    // Domain separation prefix
+    let domain = b"NULLIF";
+    
+    // Convert inputs to field elements
+    let mut inputs = Vec::new();
+    
+    // Add domain (split into field elements)
+    for chunk in domain.chunks(8) {
+        let mut bytes = [0u8; 8];
+        bytes[..chunk.len()].copy_from_slice(chunk);
+        inputs.push(FieldElement::from_u64(u64::from_le_bytes(bytes)));
+    }
+    
+    // Add sk_spend (split into 4 field elements)
+    for i in 0..4 {
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(&sk_spend[i * 8..(i + 1) * 8]);
+        inputs.push(FieldElement::from_u64(u64::from_le_bytes(bytes)));
+    }
+    
+    // Add commitment (split into 4 field elements)
+    for i in 0..4 {
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(&commitment[i * 8..(i + 1) * 8]);
+        inputs.push(FieldElement::from_u64(u64::from_le_bytes(bytes)));
+    }
+    
+    // Add net_id and tx_version
+    inputs.push(FieldElement::from_u64(net_id as u64));
+    inputs.push(FieldElement::from_u64(tx_version as u64));
+    
+    // Hash with Poseidon2
+    let hash = Poseidon2::hash(&inputs);
+    
+    // Convert field element to bytes (repeat to fill 32 bytes)
+    let hash_bytes = hash.to_bytes();
+    let mut result = [0u8; 32];
+    for i in 0..4 {
+        result[i * 8..(i + 1) * 8].copy_from_slice(&hash_bytes);
+    }
+    
+    Nullifier(result)
 }
 
 /// Compute spend tag for wallet scanning.
@@ -101,10 +141,48 @@ pub fn compute_nullifier(
 /// let epoch = 42;
 /// let tag = compute_spend_tag(&sk_view, &commitment, epoch);
 /// ```
-pub fn compute_spend_tag(_sk_view: &[u8; 32], _commitment: &[u8; 32], _epoch: u64) -> SpendTag {
-    // TODO: Implement Poseidon2 hash in Step 4
-    // For now, return placeholder
-    todo!("Poseidon2 implementation in Step 4")
+pub fn compute_spend_tag(sk_view: &[u8; 32], commitment: &[u8; 32], epoch: u64) -> SpendTag {
+    // Domain separation prefix
+    let domain = b"TAG";
+    
+    // Convert inputs to field elements
+    let mut inputs = Vec::new();
+    
+    // Add domain
+    for chunk in domain.chunks(8) {
+        let mut bytes = [0u8; 8];
+        bytes[..chunk.len()].copy_from_slice(chunk);
+        inputs.push(FieldElement::from_u64(u64::from_le_bytes(bytes)));
+    }
+    
+    // Add sk_view (split into 4 field elements)
+    for i in 0..4 {
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(&sk_view[i * 8..(i + 1) * 8]);
+        inputs.push(FieldElement::from_u64(u64::from_le_bytes(bytes)));
+    }
+    
+    // Add commitment (split into 4 field elements)
+    for i in 0..4 {
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(&commitment[i * 8..(i + 1) * 8]);
+        inputs.push(FieldElement::from_u64(u64::from_le_bytes(bytes)));
+    }
+    
+    // Add epoch
+    inputs.push(FieldElement::from_u64(epoch));
+    
+    // Hash with Poseidon2
+    let hash = Poseidon2::hash(&inputs);
+    
+    // Convert field element to bytes (repeat to fill 32 bytes)
+    let hash_bytes = hash.to_bytes();
+    let mut result = [0u8; 32];
+    for i in 0..4 {
+        result[i * 8..(i + 1) * 8].copy_from_slice(&hash_bytes);
+    }
+    
+    SpendTag(result)
 }
 
 #[cfg(test)]
@@ -164,14 +242,34 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "not yet implemented")]
-    fn test_compute_nullifier_placeholder() {
-        let _ = compute_nullifier(&[0u8; 32], &[1u8; 32], 1, 2);
+    fn test_compute_nullifier() {
+        let sk_spend = [0u8; 32];
+        let commitment = [1u8; 32];
+        
+        let nullifier1 = compute_nullifier(&sk_spend, &commitment, 1, 2);
+        let nullifier2 = compute_nullifier(&sk_spend, &commitment, 1, 2);
+        
+        // Deterministic
+        assert_eq!(nullifier1, nullifier2);
+        
+        // Different inputs produce different nullifiers
+        let nullifier3 = compute_nullifier(&sk_spend, &commitment, 2, 2);
+        assert_ne!(nullifier1, nullifier3);
     }
 
     #[test]
-    #[should_panic(expected = "not yet implemented")]
-    fn test_compute_spend_tag_placeholder() {
-        let _ = compute_spend_tag(&[0u8; 32], &[1u8; 32], 42);
+    fn test_compute_spend_tag() {
+        let sk_view = [0u8; 32];
+        let commitment = [1u8; 32];
+        
+        let tag1 = compute_spend_tag(&sk_view, &commitment, 42);
+        let tag2 = compute_spend_tag(&sk_view, &commitment, 42);
+        
+        // Deterministic
+        assert_eq!(tag1, tag2);
+        
+        // Different epoch produces different tag
+        let tag3 = compute_spend_tag(&sk_view, &commitment, 43);
+        assert_ne!(tag1, tag3);
     }
 }

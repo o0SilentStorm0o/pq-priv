@@ -3029,6 +3029,7 @@ dependencies = [
  "blake3",
  "codec",
  "crypto",
+ "crypto-stark",
  "serde",
  "serde_bytes",
  "serde_json",

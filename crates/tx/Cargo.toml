@@ -17,3 +17,4 @@ serde_with = { version = "3.4", features = ["macros"] }
 thiserror = "1.0"
 codec = { path = "../codec", version = "0.1.0" }
 crypto = { path = "../crypto", version = "0.1.0" }
+crypto-stark = { path = "../crypto/stark", version = "0.1.0" }
