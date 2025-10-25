@@ -29,6 +29,10 @@
 #![allow(clippy::cast_lossless)]
 #![allow(clippy::uninlined_format_args)]
 
+// Public modules
+pub mod hybrid_kem;
+pub mod audit_crypto;
+
 use std::convert::TryInto;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
