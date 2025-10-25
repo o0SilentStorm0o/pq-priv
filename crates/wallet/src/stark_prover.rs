@@ -175,23 +175,22 @@ pub fn generate_proof(
         index: witness_index,
         commitment: witness.commitment,
         nullifier: nullifier.0,
+        tx_version: witness.tx_version,
+        network_id: witness.network_id,
+        spend_tag: spend_tag.0,
     };
 
     // Generate STARK proof
     let stark_proof = prove_one_of_many(&stark_params, anonymity_set, &crypto_witness)
         .map_err(|e| ProverError::ProvingFailed(e.to_string()))?;
 
-    // Compute Merkle root from proof
+    // Compute Merkle root from proof (now 32 bytes)
     let merkle_root = stark_proof.trace_commitment;
-    let mut root_32 = [0u8; 32];
-    for i in 0..4 {
-        root_32[i * 8..(i + 1) * 8].copy_from_slice(&merkle_root);
-    }
 
     let public_inputs = PublicInputs {
         nullifier,
         spend_tag,
-        merkle_root: root_32,
+        merkle_root,
     };
 
     let security_str = match config.security_level {
@@ -238,7 +237,7 @@ mod tests {
 
         assert_eq!(proof.metadata.anonymity_set_size, 64);
         assert_eq!(proof.metadata.security_level, "standard");
-        assert_eq!(proof.proof_bytes.len(), 8); // Trace commitment (8 bytes)
+        assert_eq!(proof.proof_bytes.len(), 32); // Trace commitment (32 bytes)
         
         // Verify nullifier and spend tag are non-zero
         assert_ne!(proof.public_inputs.nullifier.0, [0u8; 32]);

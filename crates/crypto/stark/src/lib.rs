@@ -31,6 +31,7 @@ pub mod params;
 pub mod poseidon2;
 pub mod prove;
 pub mod traits;
+pub mod transcript;
 pub mod verify;
 
 pub use field::{FieldElement, GOLDILOCKS_PRIME};
@@ -41,6 +42,7 @@ pub use poseidon2::{Poseidon2, STATE_WIDTH};
 pub use params::{SecurityLevel, StarkParams};
 pub use prove::prove_one_of_many;
 pub use traits::{StarkProof, StarkWitness};
+pub use transcript::Transcript;
 pub use verify::verify_one_of_many;
 
 /// STARK library version for protocol compatibility

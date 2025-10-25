@@ -6,6 +6,7 @@ use crate::field::FieldElement;
 use crate::fri::{FriParams, FriProof, FriProver};
 use crate::merkle_tree::MerkleTree;
 use crate::poseidon2::Poseidon2;
+use crate::transcript::Transcript;
 use crate::{StarkParams, StarkProof, StarkWitness};
 
 /// Error during proof generation.
@@ -110,7 +111,7 @@ pub fn prove_one_of_many(
         _ => FriParams::secure(),
     };
 
-    let mut fri_prover = FriProver::new(fri_params.clone(), trace);
+    let mut fri_prover = FriProver::new(fri_params.clone(), trace.clone());
     
     // Generate FRI challenges (deterministic from Merkle root)
     let challenges: Vec<FieldElement> = (0..fri_params.num_rounds())
@@ -129,9 +130,25 @@ pub fn prove_one_of_many(
     
     let query_proofs = fri_prover.prove_queries(&query_indices);
 
-    // Step 6: Construct STARK proof
+    // Step 6: Build canonical 32-byte trace commitment
+    // Combine trace elements into single digest for collision resistance
+    let trace_digest = Poseidon2::hash_to_digest(&trace);
+
+    // Step 7: Build Fiat-Shamir transcript (anti-malleability)
+    let mut transcript = Transcript::new();
+    transcript.absorb_tx_version(witness.tx_version);
+    transcript.absorb_network_id(witness.network_id);
+    transcript.absorb_nullifier(&witness.nullifier);
+    transcript.absorb_spend_tag(&witness.spend_tag);
+    transcript.absorb_anonymity_set_root(&trace_digest); // Bind to trace commitment
+    transcript.absorb_anonymity_set_size(anonymity_set.len());
+    
+    let transcript_challenge = transcript.finalize_to_bytes();
+
+    // Step 8: Construct STARK proof
     Ok(StarkProof {
-        trace_commitment: merkle_root.to_bytes(),
+        trace_commitment: trace_digest,
+        transcript_challenge,
         fri_proof: FriProof {
             commitment: fri_commitment,
             query_proofs,
@@ -166,13 +183,17 @@ mod tests {
             index: 5,
             commitment: anonymity_set[5],
             nullifier: [1u8; 32],
+            tx_version: 2,
+            network_id: 1,
+            spend_tag: [2u8; 32],
         };
 
         let result = prove_one_of_many(&params, &anonymity_set, &witness);
         assert!(result.is_ok());
         
         let proof = result.unwrap();
-        assert_eq!(proof.trace_commitment.len(), 8);
+        assert_eq!(proof.trace_commitment.len(), 32); // 32-byte digest
+        assert_eq!(proof.transcript_challenge.len(), 32); // 32-byte challenge
     }
 
     #[test]
@@ -184,6 +205,9 @@ mod tests {
             index: 100, // Out of bounds
             commitment: [0u8; 32],
             nullifier: [1u8; 32],
+            tx_version: 2,
+            network_id: 1,
+            spend_tag: [2u8; 32],
         };
 
         let result = prove_one_of_many(&params, &anonymity_set, &witness);
@@ -206,6 +230,9 @@ mod tests {
             index: 0,
             commitment: [99u8; 32], // Doesn't match anonymity_set[0]
             nullifier: [1u8; 32],
+            tx_version: 2,
+            network_id: 1,
+            spend_tag: [2u8; 32],
         };
 
         let result = prove_one_of_many(&params, &anonymity_set, &witness);

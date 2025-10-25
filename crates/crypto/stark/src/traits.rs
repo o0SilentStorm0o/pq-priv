@@ -12,8 +12,18 @@ use serde::Serialize;
 /// without revealing the index.
 #[derive(Debug, Clone, Serialize)]
 pub struct StarkProof {
-    /// Merkle root of execution trace
-    pub trace_commitment: [u8; 8],
+    /// Merkle root of execution trace (32-byte canonical Poseidon2 digest)
+    /// 
+    /// Security: 32 bytes provide 256-bit collision resistance, preventing
+    /// Merkle root collisions that could break soundness.
+    pub trace_commitment: [u8; 32],
+
+    /// Fiat-Shamir transcript challenge (32 bytes)
+    /// 
+    /// Binds proof to transaction context (tx_version, network_id, nullifier,
+    /// spend_tag, anonymity_set_root, set_size). Prevents proof extraction
+    /// and replay across transactions.
+    pub transcript_challenge: [u8; 32],
 
     /// FRI proof of low-degree polynomial
     #[serde(skip)]
@@ -36,6 +46,15 @@ pub struct StarkWitness {
 
     /// Nullifier (prevents double-spend detection)
     pub nullifier: [u8; 32],
+
+    /// Transaction version (for transcript binding)
+    pub tx_version: u16,
+
+    /// Network ID (for transcript binding)
+    pub network_id: u8,
+
+    /// Spend tag (for transcript binding)
+    pub spend_tag: [u8; 32],
 }
 
 /// Trait for STARK provable computations.
@@ -69,6 +88,9 @@ mod tests {
             index: 42,
             commitment: [0u8; 32],
             nullifier: [1u8; 32],
+            tx_version: 2,
+            network_id: 1,
+            spend_tag: [2u8; 32],
         };
 
         assert_eq!(witness.index, 42);

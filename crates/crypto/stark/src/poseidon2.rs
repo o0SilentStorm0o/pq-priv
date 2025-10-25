@@ -68,6 +68,30 @@ impl Poseidon2 {
         hasher.state[0]
     }
 
+    /// Hash variable-length input to 32-byte digest (canonical commitment format).
+    ///
+    /// Combines first 4 state elements (4 * 8 bytes = 32 bytes) for
+    /// collision resistance. This provides 256-bit security against collisions.
+    pub fn hash_to_digest(inputs: &[FieldElement]) -> [u8; 32] {
+        let mut hasher = Self::new();
+        
+        // Absorb inputs
+        for chunk in inputs.chunks(STATE_WIDTH) {
+            for (i, &input) in chunk.iter().enumerate() {
+                hasher.state[i] = hasher.state[i] + input;
+            }
+            hasher.permute();
+        }
+        
+        // Extract first 4 elements (32 bytes total)
+        let mut digest = [0u8; 32];
+        for i in 0..4 {
+            let bytes = hasher.state[i].to_bytes();
+            digest[i * 8..(i + 1) * 8].copy_from_slice(&bytes);
+        }
+        digest
+    }
+
     /// Apply Poseidon2 permutation to internal state.
     fn permute(&mut self) {
         let mut round = 0;

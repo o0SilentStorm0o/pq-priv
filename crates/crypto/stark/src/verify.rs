@@ -50,9 +50,9 @@ pub fn verify_one_of_many(
     proof: &StarkProof,
 ) -> Result<(), VerifyError> {
     // Step 1: Check proof structure
-    if proof.trace_commitment.len() != 8 {
+    if proof.trace_commitment.len() != 32 {
         return Err(VerifyError::InvalidProof(
-            "Invalid trace commitment size".to_string(),
+            "Invalid trace commitment size (expected 32 bytes)".to_string(),
         ));
     }
 
@@ -64,11 +64,15 @@ pub fn verify_one_of_many(
 
     let fri_verifier = FriVerifier::new(fri_params.clone());
 
-    // Step 3: Generate FRI challenges (same as prover)
-    let trace_root = FieldElement::from_bytes(&proof.trace_commitment);
+    // Step 3: Generate FRI challenges from trace commitment
+    // Extract first field element from 32-byte digest for challenge derivation
+    let mut trace_seed_bytes = [0u8; 8];
+    trace_seed_bytes.copy_from_slice(&proof.trace_commitment[0..8]);
+    let trace_seed = FieldElement::from_bytes(&trace_seed_bytes);
+    
     let challenges: Vec<FieldElement> = (0..fri_params.num_rounds())
         .map(|i| {
-            let seed = trace_root.to_canonical_u64().wrapping_add(i as u64);
+            let seed = trace_seed.to_canonical_u64().wrapping_add(i as u64);
             FieldElement::from_u64(seed)
         })
         .collect();
@@ -112,6 +116,9 @@ mod tests {
             index: 5,
             commitment: anonymity_set[5],
             nullifier: [1u8; 32],
+            tx_version: 2,
+            network_id: 1,
+            spend_tag: [2u8; 32],
         };
 
         let proof = prove_one_of_many(&params, &anonymity_set, &witness).unwrap();
