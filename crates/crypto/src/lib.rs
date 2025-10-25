@@ -14,6 +14,21 @@
 //! - **Constant-Time**: Critical operations use constant-time comparisons
 //! - **Strict Validation**: All deserializations enforce exact length checks
 
+#![forbid(unsafe_code)]
+#![deny(clippy::all)]
+#![warn(clippy::pedantic)]
+#![allow(clippy::module_name_repetitions)]
+#![allow(clippy::similar_names)]
+#![allow(clippy::too_many_lines)]
+#![allow(clippy::must_use_candidate)]
+#![allow(clippy::missing_errors_doc)]
+#![allow(clippy::missing_panics_doc)]
+#![allow(clippy::doc_markdown)]
+#![allow(clippy::manual_let_else)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_lossless)]
+#![allow(clippy::uninlined_format_args)]
+
 use std::convert::TryInto;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};

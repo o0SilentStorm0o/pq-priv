@@ -102,11 +102,11 @@ pub struct AuditPacket {
     pub metadata: AuditMetadata,
 
     /// Encrypted payload (Kyber512 + X25519 hybrid encryption).
-    /// Contains: L1Data | L2Data | L3Data (depending on level)
+    /// Contains: `L1Data` | `L2Data` | `L3Data` (depending on level)
     #[serde(with = "serde_bytes")]
     pub encrypted_payload: Vec<u8>,
 
-    /// Dilithium2 signature over (metadata || encrypted_payload).
+    /// Dilithium2 signature over `(metadata || encrypted_payload)`.
     #[serde(with = "serde_bytes")]
     pub signature: Vec<u8>,
 }
@@ -127,26 +127,34 @@ pub enum AuditError {
 }
 
 /// Create an audit packet for exchange compliance.
-///
 /// **Current Status**: Placeholder implementation that serializes audit data
 /// but uses stub encryption/signing. Real Kyber512+X25519 and Dilithium2
 /// will be wired up in Step 6 (post-quantum crypto integration).
 ///
 /// # Arguments
 ///
-/// * `level` - Audit disclosure level (L1/L2/L3)
-/// * `txid` - Transaction ID being audited
-/// * `spend_tag` - Spend tag from TX witness
-/// * `nullifier` - Nullifier from TX witness
-/// * `stark_proof` - STARK proof bytes (from prover)
-/// * `amount` - Transaction amount (required for L2/L3)
-/// * `sender_keys` - Sender identity keys (required for L3)
-/// * `exchange_pubkey` - Exchange's public encryption key (for packet encryption)
+/// * `level` - Audit level (L1/L2/L3)
+/// * `txid` - Transaction ID
+/// * `spend_tag` - Spend tag for tracing
+/// * `nullifier` - Transaction nullifier
+/// * `stark_proof` - STARK privacy proof
+/// * `amount` - Transaction amount (L2+ only)
+/// * `sender_keys` - Sender keys (L3 only)
+/// * `_exchange_pubkey` - Exchange public key for encryption
 ///
 /// # Returns
 ///
 /// * `Ok(AuditPacket)` - Encrypted packet ready for submission
 /// * `Err(AuditError)` - If required fields are missing
+///
+/// # Errors
+///
+/// Returns `AuditError::MissingAmount` if L2/L3 level requires amount but none provided.
+/// Returns `AuditError::MissingSenderKeys` if L3 level requires keys but none provided.
+///
+/// # Panics
+///
+/// May panic if JSON serialization fails (should never happen with valid data).
 #[allow(clippy::too_many_arguments)]
 pub fn create_audit_packet(
     level: AuditLevel,

@@ -119,15 +119,21 @@ pub struct ProofMetadata {
 /// * `Ok(StarkProof)` - Proof with nullifier, spend tag, and STARK proof bytes
 /// * `Err(ProverError)` - If validation fails or proving fails
 ///
+/// # Errors
+///
+/// Returns `ProverError::AnonymitySetTooSmall` if anonymity set has fewer than 32 elements.
+/// Returns `ProverError::MissingCommitment` if witness commitment is not in the anonymity set.
+/// Returns `ProverError::ProvingFailed` if STARK proof generation fails.
+///
 /// # Security Notes
 ///
-/// - Nullifier prevents double-spending (derived from sk_spend + commitment)
-/// - Spend tag enables exchange compliance (derived from sk_view + commitment + epoch)
+/// - Nullifier prevents double-spending (derived from `sk_spend` + commitment)
+/// - Spend tag enables exchange compliance (derived from `sk_view` + commitment + epoch)
 /// - STARK proof demonstrates commitment exists in anonymity set
 pub fn generate_proof(
-    witness: StarkWitness,
+    witness: &StarkWitness,
     anonymity_set: &[[u8; 32]],
-    config: ProverConfig,
+    config: &ProverConfig,
 ) -> Result<StarkProof, ProverError> {
     // Validate anonymity set size
     if anonymity_set.len() < 32 {
@@ -233,7 +239,7 @@ mod tests {
         anonymity_set[10] = witness.commitment;
 
         let config = ProverConfig::default();
-        let proof = generate_proof(witness, &anonymity_set, config).expect("proof generation");
+        let proof = generate_proof(&witness, &anonymity_set, &config).expect("proof generation");
 
         assert_eq!(proof.metadata.anonymity_set_size, 64);
         assert_eq!(proof.metadata.security_level, "standard");
@@ -257,7 +263,7 @@ mod tests {
 
         let anonymity_set = vec![[42u8; 32]; 16]; // Too small
         let config = ProverConfig::default();
-        let result = generate_proof(witness, &anonymity_set, config);
+        let result = generate_proof(&witness, &anonymity_set, &config);
 
         assert!(matches!(result, Err(ProverError::AnonymitySetTooSmall(16))));
     }
@@ -275,7 +281,7 @@ mod tests {
 
         let anonymity_set = vec![[0u8; 32]; 64]; // Doesn't contain witness.commitment
         let config = ProverConfig::default();
-        let result = generate_proof(witness, &anonymity_set, config);
+        let result = generate_proof(&witness, &anonymity_set, &config);
 
         assert!(matches!(result, Err(ProverError::InvalidCommitment)));
     }

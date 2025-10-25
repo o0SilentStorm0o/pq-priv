@@ -39,6 +39,16 @@ jobs:
       - name: Format check
         run: cargo fmt --all -- --check
 
+      - name: Deny TODOs in src
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          if git grep -nE 'TODO|FIXME|STUB|HACK|XXX|PLACEHOLDER|unimplemented!|todo!' -- 'crates/**/src/**/*.rs' ':!crates/**/src/bin/**' ':!crates/**/tests/**'; then
+            echo "ERROR: Found TODO/FIXME/STUB markers in production source code"
+            echo "TODOs are only allowed in tests/ and docs/"
+            exit 1
+          fi
+
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 

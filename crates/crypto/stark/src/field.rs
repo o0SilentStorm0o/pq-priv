@@ -108,7 +108,7 @@ impl FieldElement {
     }
 
     /// Negate the field element (-self mod p).
-    pub fn neg(self) -> Self {
+    pub fn negate(self) -> Self {
         if self.value == 0 {
             Self::ZERO
         } else {
@@ -158,8 +158,7 @@ fn mul_internal(a: u64, b: u64) -> u64 {
     let sum = adjustment + (low as u128);
     
     // Final reduction (may overflow 64 bits again, so reduce twice if needed)
-    let result = (sum % (GOLDILOCKS_PRIME as u128)) as u64;
-    result
+    (sum % (GOLDILOCKS_PRIME as u128)) as u64
 }
 
 // ========== Trait Implementations ==========
@@ -227,7 +226,7 @@ impl Neg for FieldElement {
     type Output = Self;
 
     fn neg(self) -> Self {
-        self.neg()
+        self.negate()
     }
 }
 

@@ -8,25 +8,48 @@
 //!
 //! ## Architecture
 //!
-//! - **Traits**: Generic proving/verification interfaces (Step 1)
-//! - **Arithmetic**: Field operations, FFT, polynomial evaluation (Step 2)
-//! - **Merkle**: Commitment trees for trace and FRI (Step 3)
-//! - **Prover**: STARK trace generation and proof construction (Step 4)
-//! - **Verifier**: FRI-based verification (Step 5)
+//! - **Traits**: Generic proving/verification interfaces
+//! - **Field**: Goldilocks field arithmetic (64-bit prime)
+//! - **Merkle**: Poseidon2-based commitment trees
+//! - **Prover**: STARK trace generation and proof construction
+//! - **Verifier**: FRI-based verification
 //!
 //! ## Security Parameters
 //!
 //! Default configuration provides ~100-bit security:
-//! - Field: 64-bit prime (FRI-friendly)
+//! - Field: Goldilocks GF(2^64 - 2^32 + 1)
 //! - FRI reduction factor: 8
-//! - Number of queries: 27
-//! - Hash function: Poseidon2 (STARK-friendly)
+//! - Number of queries: 100
+//! - Hash function: Poseidon2 (12-state, 30 rounds)
 
-pub mod arith;
+#![forbid(unsafe_code)]
+#![deny(clippy::all)]
+#![warn(clippy::pedantic)]
+#![allow(clippy::module_name_repetitions)]
+#![allow(clippy::similar_names)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::cast_lossless)]
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::uninlined_format_args)]
+#![allow(clippy::float_cmp)]
+#![allow(clippy::unreadable_literal)]
+#![allow(clippy::must_use_candidate)]
+#![allow(clippy::return_self_not_must_use)]
+#![allow(clippy::missing_errors_doc)]
+#![allow(clippy::missing_panics_doc)]
+#![allow(clippy::doc_markdown)]
+#![allow(clippy::needless_pass_by_value)]
+#![allow(clippy::inline_always)]
+#![allow(clippy::redundant_closure_for_method_calls)]
+#![allow(clippy::needless_range_loop)]
+#![allow(clippy::assign_op_pattern)]
+#![allow(clippy::manual_is_multiple_of)]
+#![allow(clippy::match_same_arms)]
+
 pub mod batch;
 pub mod field;
 pub mod fri;
-pub mod merkle;
 pub mod merkle_tree;
 pub mod params;
 pub mod poseidon2;
