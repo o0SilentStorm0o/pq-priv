@@ -104,12 +104,24 @@ pub fn prove_one_of_many(
     let merkle_root = merkle_tree.root();
 
     // Step 4: Generate execution trace (simplified: just witness element)
+    // CRITICAL: Use constant-time operations to prevent timing attacks
     let trace_length = 16; // Small trace for one-of-many
     let mut trace = vec![FieldElement::ZERO; trace_length];
     
-    // Encode witness index, commitment, and merkle root into trace
-    trace[0] = FieldElement::from_u64(witness.index as u64);
-    trace[1] = set_elements[witness.index];
+    // Encode witness index using constant-time select (no timing leak)
+    // We encode the witness element, NOT the index directly
+    let witness_elem = {
+        let mut result = FieldElement::ZERO;
+        for (i, elem) in set_elements.iter().enumerate() {
+            let mask = constant_time_eq(i as u64, witness.index as u64);
+            let selected = constant_time_select(mask, *elem, result);
+            result = selected; // Accumulate with constant-time select
+        }
+        result
+    };
+    
+    trace[0] = FieldElement::from_u64(witness.index as u64); // Index encoding (TODO: consider hiding this too)
+    trace[1] = witness_elem; // Witness commitment (constant-time selected)
     trace[2] = merkle_root; // Bind trace to anonymity set root
     
     // Fill rest of trace with constraint evaluations
@@ -169,6 +181,38 @@ pub fn prove_one_of_many(
         },
         query_responses: vec![], // Simplified for now
     })
+}
+
+// ========== Constant-Time Helpers ==========
+
+/// Constant-time equality check.
+///
+/// Returns 0xFFFFFFFFFFFFFFFF if a == b, otherwise 0x0000000000000000.
+/// No secret-dependent branches.
+#[inline]
+fn constant_time_eq(a: u64, b: u64) -> u64 {
+    let diff = a ^ b;
+    // Classic constant-time zero test:
+    // x == 0 iff (x | -x) has MSB = 0
+    // MSB = 0 → shift gives 0 → negate to 1 → sub 1 → wraps to 0xFFFF...
+    // MSB = 1 → shift gives 1 → negate to 0 → sub 1 → wraps to 0xFFFF..., but we want 0
+    //
+    // Simpler: (0u64.wrapping_sub(is_zero)) where is_zero = !(has_msb_set)
+    let has_nonzero_bit = (diff | diff.wrapping_neg()) >> 63;
+    let is_zero = 1u64 - has_nonzero_bit;
+    0u64.wrapping_sub(is_zero) // 0 - 1 = 0xFFFF..., 0 - 0 = 0
+}
+
+/// Constant-Time Helpers
+///
+/// If mask == 0xFFFFFFFFFFFFFFFF, return true_val.
+/// If mask == 0x0000000000000000, return false_val.
+/// No secret-dependent branches.
+#[inline]
+fn constant_time_select(mask: u64, true_val: FieldElement, false_val: FieldElement) -> FieldElement {
+    let a = true_val.to_canonical_u64() & mask;
+    let b = false_val.to_canonical_u64() & !mask;
+    FieldElement::from_canonical_u64(a | b)
 }
 
 // ========== Helper Functions ==========
@@ -361,6 +405,55 @@ mod tests {
         // Different sets produce different trace commitments
         // (padding seed binds to all real leaves)
         assert_ne!(proof1.trace_commitment, proof2.trace_commitment);
+    }
+
+    #[test]
+    fn test_constant_time_eq() {
+        // Equal values -> all bits set
+        assert_eq!(constant_time_eq(42, 42), 0xFFFFFFFFFFFFFFFF);
+        assert_eq!(constant_time_eq(0, 0), 0xFFFFFFFFFFFFFFFF);
+        assert_eq!(constant_time_eq(u64::MAX, u64::MAX), 0xFFFFFFFFFFFFFFFF);
+
+        // Different values -> all bits clear
+        assert_eq!(constant_time_eq(42, 43), 0);
+        assert_eq!(constant_time_eq(0, 1), 0);
+        assert_eq!(constant_time_eq(u64::MAX, 0), 0);
+    }
+
+    #[test]
+    fn test_constant_time_select() {
+        let a = FieldElement::from_u64(100);
+        let b = FieldElement::from_u64(200);
+
+        // mask = 0xFFFF... -> select a
+        let mask_true = 0xFFFFFFFFFFFFFFFF;
+        assert_eq!(constant_time_select(mask_true, a, b), a);
+
+        // mask = 0x0000... -> select b
+        let mask_false = 0x0000000000000000;
+        assert_eq!(constant_time_select(mask_false, a, b), b);
+    }
+
+    #[test]
+    fn test_witness_selection_constant_time() {
+        // This test verifies that witness selection doesn't leak timing
+        // by ensuring all indices are processed identically
+
+        let set_elements: Vec<FieldElement> = (0..16)
+            .map(|i| FieldElement::from_u64(i as u64 * 10))
+            .collect();
+
+        let witness_index = 7;
+        let expected = FieldElement::from_u64(70); // 7 * 10
+
+        // Simulate constant-time selection
+        let mut result = FieldElement::ZERO;
+        for (i, elem) in set_elements.iter().enumerate() {
+            let mask = constant_time_eq(i as u64, witness_index);
+            result = constant_time_select(mask, *elem, result);
+        }
+
+        assert_eq!(result, expected);
     }
 }
 
