@@ -247,6 +247,18 @@ pub struct PrivacyMetrics {
     stark_invalid_proofs_total: Arc<Mutex<u64>>,
     /// Total number of nullifier collisions detected (counter).
     nullifier_collisions_total: Arc<Mutex<u64>>,
+    
+    // STARK prove metrics (Commit #6)
+    /// STARK proof generation latency histogram (milliseconds).
+    /// Buckets: [100, 250, 500, 1000, 2000, 5000, 10000, +Inf] ms
+    stark_prove_latency_buckets: Arc<Mutex<[u64; 8]>>,
+    /// Total number of STARK proofs generated (counter).
+    stark_prove_count_total: Arc<Mutex<u64>>,
+    /// STARK proof size histogram (bytes).
+    /// Buckets: [1KB, 5KB, 10KB, 20KB, 50KB, 100KB, 200KB, +Inf]
+    stark_proof_size_buckets: Arc<Mutex<[u64; 8]>>,
+    /// Last STARK proof size in bytes (gauge).
+    stark_proof_size_bytes: Arc<Mutex<u64>>,
 }
 
 impl PrivacyMetrics {
@@ -260,6 +272,10 @@ impl PrivacyMetrics {
             stark_verify_count_total: Arc::new(Mutex::new(0)),
             stark_invalid_proofs_total: Arc::new(Mutex::new(0)),
             nullifier_collisions_total: Arc::new(Mutex::new(0)),
+            stark_prove_latency_buckets: Arc::new(Mutex::new([0; 8])),
+            stark_prove_count_total: Arc::new(Mutex::new(0)),
+            stark_proof_size_buckets: Arc::new(Mutex::new([0; 8])),
+            stark_proof_size_bytes: Arc::new(Mutex::new(0)),
         }
     }
 
@@ -325,6 +341,44 @@ impl PrivacyMetrics {
     /// Record a nullifier collision detection.
     pub fn record_nullifier_collision(&self) {
         *self.nullifier_collisions_total.lock() += 1;
+    }
+
+    /// Record a successful STARK proof generation with duration and size.
+    ///
+    /// # Arguments
+    /// * `duration_ms` - Proof generation duration in milliseconds
+    /// * `proof_size_bytes` - Size of generated proof in bytes
+    pub fn record_stark_prove_success(&self, duration_ms: u64, proof_size_bytes: u64) {
+        *self.stark_prove_count_total.lock() += 1;
+        *self.stark_proof_size_bytes.lock() = proof_size_bytes;
+
+        // Bucket boundaries for latency: [100, 250, 500, 1000, 2000, 5000, 10000, +Inf]
+        let mut latency_buckets = self.stark_prove_latency_buckets.lock();
+        let latency_idx = match duration_ms {
+            0..=100 => 0,
+            101..=250 => 1,
+            251..=500 => 2,
+            501..=1000 => 3,
+            1001..=2000 => 4,
+            2001..=5000 => 5,
+            5001..=10000 => 6,
+            _ => 7, // +Inf
+        };
+        latency_buckets[latency_idx] += 1;
+
+        // Bucket boundaries for size: [1KB, 5KB, 10KB, 20KB, 50KB, 100KB, 200KB, +Inf]
+        let mut size_buckets = self.stark_proof_size_buckets.lock();
+        let size_idx = match proof_size_bytes {
+            0..=1024 => 0,              // ≤1KB
+            1025..=5120 => 1,           // ≤5KB
+            5121..=10_240 => 2,         // ≤10KB
+            10_241..=20_480 => 3,       // ≤20KB
+            20_481..=51_200 => 4,       // ≤50KB
+            51_201..=102_400 => 5,      // ≤100KB
+            102_401..=204_800 => 6,     // ≤200KB
+            _ => 7,                      // >200KB
+        };
+        size_buckets[size_idx] += 1;
     }
 
     /// Generate Prometheus exposition format output for privacy metrics.
@@ -477,6 +531,110 @@ impl PrivacyMetrics {
         output.push_str(&format!(
             "pqpriv_nullifier_collision_total {}\n",
             nullifier_collisions
+        ));
+
+        // STARK proof generation latency histogram (Commit #6)
+        {
+            let buckets = *self.stark_prove_latency_buckets.lock();
+            let count: u64 = buckets.iter().sum();
+
+            output.push_str(
+                "# HELP pqpriv_stark_prove_ms STARK proof generation duration in milliseconds\n",
+            );
+            output.push_str("# TYPE pqpriv_stark_prove_ms histogram\n");
+
+            let bucket_bounds = [100.0, 250.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0];
+            let mut cumulative = 0u64;
+
+            for (i, &bound) in bucket_bounds.iter().enumerate() {
+                cumulative += buckets[i];
+                output.push_str(&format!(
+                    "pqpriv_stark_prove_ms_bucket{{le=\"{}\"}} {}\n",
+                    bound, cumulative
+                ));
+            }
+
+            cumulative += buckets[7];
+            output.push_str(&format!(
+                "pqpriv_stark_prove_ms_bucket{{le=\"+Inf\"}} {}\n",
+                cumulative
+            ));
+
+            output.push_str(&format!("pqpriv_stark_prove_ms_count {}\n", count));
+
+            // Calculate sum (approximate from bucket midpoints)
+            let sum_ms = (buckets[0] as f64 * 50.0)
+                + (buckets[1] as f64 * 175.0)
+                + (buckets[2] as f64 * 375.0)
+                + (buckets[3] as f64 * 750.0)
+                + (buckets[4] as f64 * 1500.0)
+                + (buckets[5] as f64 * 3500.0)
+                + (buckets[6] as f64 * 7500.0)
+                + (buckets[7] as f64 * 15000.0);
+            output.push_str(&format!("pqpriv_stark_prove_ms_sum {:.2}\n", sum_ms));
+        }
+
+        // STARK prove counter
+        let stark_prove_count = *self.stark_prove_count_total.lock();
+        output.push_str(
+            "# HELP pqpriv_stark_prove_count Total number of STARK proofs generated\n",
+        );
+        output.push_str("# TYPE pqpriv_stark_prove_count counter\n");
+        output.push_str(&format!(
+            "pqpriv_stark_prove_count {}\n",
+            stark_prove_count
+        ));
+
+        // STARK proof size histogram
+        {
+            let buckets = *self.stark_proof_size_buckets.lock();
+            let count: u64 = buckets.iter().sum();
+
+            output.push_str(
+                "# HELP pqpriv_stark_proof_size_bytes STARK proof size in bytes\n",
+            );
+            output.push_str("# TYPE pqpriv_stark_proof_size_bytes histogram\n");
+
+            let bucket_bounds = [1024.0, 5120.0, 10_240.0, 20_480.0, 51_200.0, 102_400.0, 204_800.0];
+            let mut cumulative = 0u64;
+
+            for (i, &bound) in bucket_bounds.iter().enumerate() {
+                cumulative += buckets[i];
+                output.push_str(&format!(
+                    "pqpriv_stark_proof_size_bytes_bucket{{le=\"{}\"}} {}\n",
+                    bound, cumulative
+                ));
+            }
+
+            cumulative += buckets[7];
+            output.push_str(&format!(
+                "pqpriv_stark_proof_size_bytes_bucket{{le=\"+Inf\"}} {}\n",
+                cumulative
+            ));
+
+            output.push_str(&format!("pqpriv_stark_proof_size_bytes_count {}\n", count));
+
+            // Calculate sum (approximate from bucket midpoints)
+            let sum_bytes = (buckets[0] as f64 * 512.0)
+                + (buckets[1] as f64 * 3072.0)
+                + (buckets[2] as f64 * 7680.0)
+                + (buckets[3] as f64 * 15_360.0)
+                + (buckets[4] as f64 * 35_840.0)
+                + (buckets[5] as f64 * 76_800.0)
+                + (buckets[6] as f64 * 153_600.0)
+                + (buckets[7] as f64 * 307_200.0);
+            output.push_str(&format!("pqpriv_stark_proof_size_bytes_sum {:.0}\n", sum_bytes));
+        }
+
+        // STARK proof size gauge (last proof size)
+        let proof_size = *self.stark_proof_size_bytes.lock();
+        output.push_str(
+            "# HELP pqpriv_stark_proof_size_bytes_last Last STARK proof size in bytes\n",
+        );
+        output.push_str("# TYPE pqpriv_stark_proof_size_bytes_last gauge\n");
+        output.push_str(&format!(
+            "pqpriv_stark_proof_size_bytes_last {}\n",
+            proof_size
         ));
 
         output
@@ -905,4 +1063,73 @@ mod tests {
             "# HELP pqpriv_nullifier_collisions_total Number of nullifier collisions detected"
         ));
     }
+
+    // Commit #6: Test STARK prove metrics
+    #[test]
+    fn test_privacy_metrics_stark_prove_success() {
+        let metrics = PrivacyMetrics::new();
+
+        // Record proofs in different latency and size buckets
+        // Size values: 1024 (bucket 0), 8192 (bucket 1), 12000 (bucket 2), 18000 (bucket 3), 40000 (bucket 4)
+        metrics.record_stark_prove_success(50, 1024);    // Latency bucket 0 (≤100ms), size bucket 0 (≤1KB)
+        metrics.record_stark_prove_success(200, 8192);   // Latency bucket 1 (101-250ms), size bucket 1 (1-5KB)
+        metrics.record_stark_prove_success(400, 12000);  // Latency bucket 2 (251-500ms), size bucket 2 (5-10KB)
+        metrics.record_stark_prove_success(750, 18000);  // Latency bucket 3 (501-1000ms), size bucket 3 (10-20KB)
+        metrics.record_stark_prove_success(1500, 40000); // Latency bucket 4 (1001-2000ms), size bucket 4 (20-50KB)
+
+        let output = metrics.to_prometheus();
+
+        // Verify prove latency histogram (cumulative counts)
+        assert!(output.contains("pqpriv_stark_prove_ms_bucket{le=\"100\"} 1"));
+        assert!(output.contains("pqpriv_stark_prove_ms_bucket{le=\"250\"} 2"));
+        assert!(output.contains("pqpriv_stark_prove_ms_bucket{le=\"500\"} 3"));
+        assert!(output.contains("pqpriv_stark_prove_ms_bucket{le=\"1000\"} 4"));
+        assert!(output.contains("pqpriv_stark_prove_ms_bucket{le=\"2000\"} 5"));
+        assert!(output.contains("pqpriv_stark_prove_ms_bucket{le=\"+Inf\"} 5"));
+        assert!(output.contains("pqpriv_stark_prove_ms_count 5"));
+
+        // Verify proof size histogram (cumulative counts)
+        // 1024 bytes → bucket 0 (≤1024): count=1
+        // 8192 bytes is in range 1025..=5120, but 8192 > 5120, so it's in bucket 2!
+        // Let me check the actual bucket assignment...
+        // Actually from output: le="1024"} 1, le="5120"} 1, le="10240"} 2
+        // This means: 1024 in bucket 0, 8192 NOT in bucket 1 (because 8192 > 5120!)
+        // 8192 is in bucket 2 (5121..=10240)
+        assert!(output.contains("pqpriv_stark_proof_size_bytes_bucket{le=\"1024\"} 1"));
+        assert!(output.contains("pqpriv_stark_proof_size_bytes_bucket{le=\"5120\"} 1"));  // Still 1, 8192 not here
+        assert!(output.contains("pqpriv_stark_proof_size_bytes_bucket{le=\"10240\"} 2")); // 8192 is here
+        assert!(output.contains("pqpriv_stark_proof_size_bytes_bucket{le=\"20480\"} 4")); // +12000, +18000
+        assert!(output.contains("pqpriv_stark_proof_size_bytes_bucket{le=\"51200\"} 5")); // +40000
+        assert!(output.contains("pqpriv_stark_proof_size_bytes_bucket{le=\"+Inf\"} 5"));
+        assert!(output.contains("pqpriv_stark_proof_size_bytes_count 5"));
+
+        // Verify prove counter
+        assert!(output.contains("pqpriv_stark_prove_count 5"));
+
+        // Verify last proof size gauge (should be last recorded: 40000)
+        assert!(output.contains("pqpriv_stark_proof_size_bytes_last 40000"));
+    }
+
+    #[test]
+    fn test_privacy_metrics_stark_proof_size_boundaries() {
+        let metrics = PrivacyMetrics::new();
+
+        // Test boundary conditions for proof size buckets
+        metrics.record_stark_prove_success(100, 1024);    // Exactly 1KB (bucket 0: 0..=1024)
+        metrics.record_stark_prove_success(100, 1025);    // Just over 1KB (bucket 1: 1025..=5120)
+        metrics.record_stark_prove_success(100, 102400);  // Exactly 100KB (bucket 5: 51201..=102400)
+        metrics.record_stark_prove_success(100, 102401);  // Just over 100KB (bucket 6: 102401..=204800)
+        metrics.record_stark_prove_success(100, 300000);  // Way over 200KB (bucket 7: >204800)
+
+        let output = metrics.to_prometheus();
+
+        // Verify correct bucket assignment (cumulative)
+        // Actual output: le="1024"} 1, le="5120"} 2, le="102400"} 3, le="204800"} 4, le="+Inf"} 5
+        assert!(output.contains("pqpriv_stark_proof_size_bytes_bucket{le=\"1024\"} 1"));
+        assert!(output.contains("pqpriv_stark_proof_size_bytes_bucket{le=\"5120\"} 2"));
+        assert!(output.contains("pqpriv_stark_proof_size_bytes_bucket{le=\"102400\"} 3"));
+        assert!(output.contains("pqpriv_stark_proof_size_bytes_bucket{le=\"204800\"} 4"));
+        assert!(output.contains("pqpriv_stark_proof_size_bytes_bucket{le=\"+Inf\"} 5"));
+    }
 }
+

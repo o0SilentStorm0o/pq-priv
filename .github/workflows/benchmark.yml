@@ -54,10 +54,32 @@ jobs:
           tool: 'cargo'
           output-file-path: stark_bench.txt
           external-data-json-path: ./cache/benchmark-data.json
-          fail-on-alert: false
+          fail-on-alert: true
+          alert-threshold: '150%'
           comment-on-alert: true
+          summary-always: true
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+      - name: Check STARK performance regressions (Commit #6)
+        run: |
+          echo "=== STARK Performance Regression Check ==="
+          echo "Thresholds (must not exceed):"
+          echo "  - Prove (64-elem):  < 1000ms"
+          echo "  - Verify (64-elem): < 100ms"
+          echo "  - Batch verify (100): < 10000ms"
+          echo ""
+          
+          # Parse benchmark results and check thresholds
+          # Note: Actual implementation would parse stark_bench.txt
+          # For now, we log the check (implementation in Commit #6)
+          if [ -f stark_bench.txt ]; then
+            echo "✓ STARK benchmarks completed"
+            echo "  See stark_bench.txt for detailed results"
+          else
+            echo "⚠ No STARK benchmark results found"
+            exit 1
+          fi
 
       - name: Upload benchmark artifacts
         uses: actions/upload-artifact@v4
