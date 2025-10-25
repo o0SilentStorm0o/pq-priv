@@ -501,6 +501,20 @@ fn map_rejection(reason: MempoolRejection) -> RpcError {
             -26,
             format!("invalid anonymity set size: {} (expected 32-256)", actual),
         ),
+        MempoolRejection::TooManyPendingV2 { limit } => RpcError::new(
+            -26,
+            format!(
+                "too many pending TX v2 transactions (DoS protection, limit: {})",
+                limit
+            ),
+        ),
+        MempoolRejection::InsufficientStarkFee { required, actual } => RpcError::new(
+            -26,
+            format!(
+                "insufficient fee for STARK verification: required {} sat/vb, actual {}",
+                required, actual
+            ),
+        ),
     }
 }
 
