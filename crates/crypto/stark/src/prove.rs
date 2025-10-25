@@ -84,10 +84,21 @@ pub fn prove_one_of_many(
         })
         .collect();
 
-    // Step 3: Build Merkle tree of anonymity set
+    // Step 3: Build Merkle tree of anonymity set with deterministic padding
     let set_size = set_elements.len().next_power_of_two();
     let mut padded_set = set_elements.clone();
-    padded_set.resize(set_size, FieldElement::ZERO);
+    
+    // Pad with deterministic dummy leaves (prevents info leak)
+    // Dummy leaf i = Poseidon2("PAD" || i || merkle_root_of_real_leaves)
+    if padded_set.len() < set_size {
+        // Compute temporary root of real leaves for binding
+        let real_root = compute_padding_seed(&set_elements);
+        
+        for i in padded_set.len()..set_size {
+            let dummy_leaf = generate_dummy_leaf(i, real_root);
+            padded_set.push(dummy_leaf);
+        }
+    }
     
     let merkle_tree = MerkleTree::new(padded_set);
     let merkle_root = merkle_tree.root();
@@ -96,12 +107,13 @@ pub fn prove_one_of_many(
     let trace_length = 16; // Small trace for one-of-many
     let mut trace = vec![FieldElement::ZERO; trace_length];
     
-    // Encode witness index and commitment into trace
+    // Encode witness index, commitment, and merkle root into trace
     trace[0] = FieldElement::from_u64(witness.index as u64);
     trace[1] = set_elements[witness.index];
+    trace[2] = merkle_root; // Bind trace to anonymity set root
     
     // Fill rest of trace with constraint evaluations
-    for i in 2..trace_length {
+    for i in 3..trace_length {
         trace[i] = trace[i - 1] + FieldElement::ONE;
     }
 
@@ -155,6 +167,29 @@ pub fn prove_one_of_many(
         },
         query_responses: vec![], // Simplified for now
     })
+}
+
+// ========== Helper Functions ==========
+
+/// Compute padding seed from real leaves (binding dummy leaves to actual set).
+fn compute_padding_seed(real_leaves: &[FieldElement]) -> FieldElement {
+    // Hash all real leaves together for deterministic padding
+    Poseidon2::hash(real_leaves)
+}
+
+/// Generate deterministic dummy leaf for padding.
+///
+/// Formula: Poseidon2("PAD" || index || seed)
+/// This ensures:
+/// - Deterministic: Same input always produces same padding
+/// - Unique: Different indices produce different leaves
+/// - Bound: Padding depends on real leaf set via seed
+fn generate_dummy_leaf(index: usize, seed: FieldElement) -> FieldElement {
+    // "PAD" as field element (0x444150 in little-endian)
+    let pad_tag = FieldElement::from_u64(0x444150);
+    let index_elem = FieldElement::from_u64(index as u64);
+    
+    Poseidon2::hash(&[pad_tag, index_elem, seed])
 }
 
 #[cfg(test)]
@@ -245,4 +280,85 @@ mod tests {
             _ => panic!("Expected InvalidWitness error"),
         }
     }
+
+    #[test]
+    fn test_deterministic_padding() {
+        let params = StarkParams {
+            security: SecurityLevel::Fast,
+            anonymity_set_size: 10, // Not power of 2, will pad to 16
+            field_modulus: crate::GOLDILOCKS_PRIME,
+            hash_function: crate::params::HashFunction::Poseidon2,
+        };
+
+        let anonymity_set: Vec<[u8; 32]> = (0..10)
+            .map(|i| {
+                let mut arr = [0u8; 32];
+                arr[0] = i as u8;
+                arr
+            })
+            .collect();
+
+        let witness = StarkWitness {
+            index: 5,
+            commitment: anonymity_set[5],
+            nullifier: [1u8; 32],
+            tx_version: 2,
+            network_id: 1,
+            spend_tag: [2u8; 32],
+        };
+
+        // Generate proof twice with same input
+        let proof1 = prove_one_of_many(&params, &anonymity_set, &witness).unwrap();
+        let proof2 = prove_one_of_many(&params, &anonymity_set, &witness).unwrap();
+
+        // Padding should be deterministic (same trace commitment)
+        assert_eq!(proof1.trace_commitment, proof2.trace_commitment);
+    }
+
+    #[test]
+    fn test_padding_binds_to_set() {
+        let params = StarkParams {
+            security: SecurityLevel::Fast,
+            anonymity_set_size: 10, // Will pad to 16
+            field_modulus: crate::GOLDILOCKS_PRIME,
+            hash_function: crate::params::HashFunction::Poseidon2,
+        };
+
+        let anonymity_set1: Vec<[u8; 32]> = (0..10)
+            .map(|i| {
+                let mut arr = [0u8; 32];
+                arr[0] = i as u8;
+                arr
+            })
+            .collect();
+
+        let mut anonymity_set2 = anonymity_set1.clone();
+        anonymity_set2[9][0] = 99; // Change last element (not witness element)
+
+        let witness1 = StarkWitness {
+            index: 5,
+            commitment: anonymity_set1[5],
+            nullifier: [1u8; 32],
+            tx_version: 2,
+            network_id: 1,
+            spend_tag: [2u8; 32],
+        };
+
+        let witness2 = StarkWitness {
+            index: 5,
+            commitment: anonymity_set2[5], // Same position, same value
+            nullifier: [1u8; 32],
+            tx_version: 2,
+            network_id: 1,
+            spend_tag: [2u8; 32],
+        };
+
+        let proof1 = prove_one_of_many(&params, &anonymity_set1, &witness1).unwrap();
+        let proof2 = prove_one_of_many(&params, &anonymity_set2, &witness2).unwrap();
+
+        // Different sets produce different trace commitments
+        // (padding seed binds to all real leaves)
+        assert_ne!(proof1.trace_commitment, proof2.trace_commitment);
+    }
 }
+

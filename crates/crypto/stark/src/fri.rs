@@ -12,8 +12,9 @@
 //!
 //! ## Security
 //!
-//! - Soundness error: ~2^(-query_count)
-//! - 27 queries → ~100-bit security
+//! - Soundness error: ~2^(-num_queries) (conservative estimate)
+//! - 100 queries → ~100-bit security (production)
+//! - 10 queries → ~10-bit security (testing ONLY)
 //! - Reduction factor: 8 (degree reduces by 8x each round)
 
 use crate::field::FieldElement;
@@ -33,20 +34,23 @@ pub struct FriParams {
 }
 
 impl FriParams {
-    /// Create FRI parameters with 100-bit security.
+    /// Create FRI parameters with ~100-bit security.
+    ///
+    /// Conservative soundness: num_queries ≈ soundness_bits
+    /// For 100-bit security, use 100 queries.
     pub fn secure() -> Self {
         Self {
             reduction_factor: 8,
-            num_queries: 27,
+            num_queries: 100, // 100 queries → ~100 bits soundness
             max_degree: 1024,
         }
     }
 
-    /// Create FRI parameters for testing (lower security).
+    /// Create FRI parameters for testing (LOW security - DO NOT use in production).
     pub fn test() -> Self {
         Self {
             reduction_factor: 4,
-            num_queries: 10,
+            num_queries: 10, // 10 queries → ~10 bits (INSECURE)
             max_degree: 256,
         }
     }
@@ -356,7 +360,7 @@ mod tests {
     fn test_fri_params() {
         let params = FriParams::secure();
         assert_eq!(params.reduction_factor, 8);
-        assert_eq!(params.num_queries, 27);
+        assert_eq!(params.num_queries, 100); // 100 queries for ~100-bit security
         
         let rounds = params.num_rounds();
         assert!(rounds > 0);
